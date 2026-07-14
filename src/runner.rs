@@ -37,11 +37,13 @@ pub struct OracleReport {
 
 #[derive(Debug, serde::Serialize)]
 pub struct RunReport {
+    pub schema: u32, // run.json contract version — bumps on breaking changes
     pub proof: String,
     pub promise_id: String,
     pub promise_statement: String,
     pub verdict: String, // "held" | "violated"
     pub seed: u32,
+    pub source: String, // manifest origin: a path, or "<stdin>"
     pub run_dir: String,
     pub steps: Vec<StepReport>,
     pub oracles: Vec<OracleReport>,
@@ -55,10 +57,13 @@ struct Service {
     label: String,
 }
 
-pub fn run(manifest: &Manifest, manifest_path: &std::path::Path, seed: u32) -> Result<RunReport> {
+pub fn run(manifest: &Manifest, manifest_text: &str, source: &str, seed: u32) -> Result<RunReport> {
     let run_dir = next_run_dir()?;
     std::fs::create_dir_all(&run_dir)?;
-    std::fs::copy(manifest_path, run_dir.join("manifest.yaml")).ok();
+    // Freeze the exact manifest bytes into the evidence dir — works for stdin too,
+    // and makes replay reference this frozen copy rather than a mutable origin path.
+    let frozen = run_dir.join("manifest.yaml");
+    std::fs::write(&frozen, manifest_text).ok();
 
     let started = Instant::now();
     let mut services: Vec<Service> = Vec::new();
@@ -116,16 +121,18 @@ pub fn run(manifest: &Manifest, manifest_path: &std::path::Path, seed: u32) -> R
     let violated = failed || oracles_out.iter().any(|o| !o.held);
 
     let report = RunReport {
+        schema: 1,
         proof: manifest.proof.clone(),
         promise_id: manifest.promise.id.clone(),
         promise_statement: manifest.promise.statement.clone(),
         verdict: if violated { "violated".into() } else { "held".into() },
         seed,
+        source: source.to_string(),
         run_dir: run_dir.display().to_string(),
         steps: steps_out,
         oracles: oracles_out,
         context_notes,
-        replay: format!("probatum run {} --seed {}", manifest_path.display(), seed),
+        replay: format!("probatum run {} --seed {}", frozen.display(), seed),
     };
 
     std::fs::write(run_dir.join("run.json"), serde_json::to_string_pretty(&report)?)?;

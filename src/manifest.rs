@@ -70,11 +70,10 @@ impl Oracle {
     }
 }
 
-pub fn load(path: &std::path::Path) -> Result<Manifest> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read manifest {}", path.display()))?;
-    let m: Manifest = serde_yaml::from_str(&text)
-        .with_context(|| format!("invalid manifest {}", path.display()))?;
+/// Parse a manifest from raw YAML text. Reading (file or stdin) happens in the
+/// caller so the exact bytes can be frozen into the evidence dir.
+pub fn parse(text: &str) -> Result<Manifest> {
+    let m: Manifest = serde_yaml::from_str(text).context("invalid manifest")?;
     if m.steps.is_empty() {
         bail!("manifest has no steps");
     }

@@ -12,7 +12,13 @@ correlated logs, context, complete artifacts, replay seed.
 probatum run proofs/dev-check.yaml           # human verdict (terminal)
 probatum run proofs/dev-check.yaml --json    # machine verdict (AI agents, CI)
 probatum run proofs/dev-check.yaml --seed N  # referenced replay
+cat manifest.yaml | probatum run -           # manifest from stdin — no temp file
 ```
+
+For agents and other chainers, `--json` is a versioned contract: `run.json`
+carries a `schema` field, and `replay` always references the manifest **frozen**
+under the run dir (`.probatum/runs/NNNN/manifest.yaml`), so a run replays from its
+own evidence regardless of what the source path did afterwards.
 
 Manifest (strictly declarative — no logic, closed vocabulary):
 

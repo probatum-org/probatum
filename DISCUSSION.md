@@ -177,6 +177,23 @@ non-vacuous.
   discussion.
 - Decision: keep the context of exchanges in this file at the project root.
 
+### 2026-07-14 — Direction: agent ergonomics first, then RAII core
+
+- Chosen order: **(b) ephemeral agent-generated manifests first**, then the RAII
+  core. probatum is built for agents and other chaining/orchestration.
+- Caveat recorded: sequence the *work* ergonomics→RAII, but do not put a real
+  agent loop on it before the RAII guard lands (easy invocation + orphan leak =
+  an efficient orphan factory).
+- Landed (agent-ergonomics slice, verified end-to-end offline):
+  - manifest from stdin (`probatum run -`) — no temp file;
+  - hermetic replay: `replay` references the frozen `manifest.yaml` under the run
+    dir, not a mutable origin path (works for stdin too);
+  - `run.json` gains a `schema` version field and a `source` field ("<stdin>" or a
+    path) — first step of treating `run.json` as a public contract.
+- Deferred: structured multi-failure output for `--json` (human verdict collapses
+  to one cause; the machine contract should carry per-step failure lists). Next
+  after the RAII core.
+
 ### 2026-07-14 — Code-grounded review and direction
 
 - Full read of the ~918-line codebase.

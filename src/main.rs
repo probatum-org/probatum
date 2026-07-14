@@ -9,8 +9,8 @@ mod manifest;
 mod runner;
 mod verdict;
 
-use anyhow::{bail, Result};
-use std::path::PathBuf;
+use anyhow::{bail, Context, Result};
+use std::io::Read;
 
 fn main() {
     let code = match real_main() {
@@ -49,16 +49,28 @@ fn real_main() -> Result<bool> {
 
     match positional.first().map(String::as_str) {
         Some("run") => {}
-        _ => bail!("usage: probatum run <manifest.yaml> [--json] [--seed N]"),
+        _ => bail!("usage: probatum run <manifest.yaml>|- [--json] [--seed N]"),
     }
     let Some(path) = positional.get(1) else {
-        bail!("usage: probatum run <manifest.yaml> [--json] [--seed N]");
+        bail!("usage: probatum run <manifest.yaml>|- [--json] [--seed N]");
     };
-    let path = PathBuf::from(path);
 
-    let m = manifest::load(&path)?;
+    // Manifest source: a file, or `-` for stdin (agents pipe an in-memory manifest).
+    let (text, source) = if path == "-" {
+        let mut s = String::new();
+        std::io::stdin()
+            .read_to_string(&mut s)
+            .context("reading manifest from stdin")?;
+        (s, "<stdin>".to_string())
+    } else {
+        let s = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read manifest {path}"))?;
+        (s, path.clone())
+    };
+
+    let m = manifest::parse(&text)?;
     let seed = seed.unwrap_or_else(random_seed);
-    let report = runner::run(&m, &path, seed)?;
+    let report = runner::run(&m, &text, &source, seed)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -71,7 +83,6 @@ fn real_main() -> Result<bool> {
 /// Seed from /dev/urandom — recorded in the evidence so every run is replayable
 /// by reference even before the seed drives any randomness (v0).
 fn random_seed() -> u32 {
-    use std::io::Read;
     let mut buf = [0u8; 4];
     if std::fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut buf))
