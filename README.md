@@ -6,6 +6,7 @@ curl, the grep and the process supervision are built in; you declare the rules
 that make a check pass or fail.
 
 ```bash
+probatum init                       # drop a commented example checks.yaml
 probatum run checks.yaml            # human verdict
 probatum run checks.yaml --json     # machine verdict (agents, CI)
 cat checks.yaml | probatum run -    # config from stdin — no temp file
@@ -71,7 +72,9 @@ a typo must never silently skip a check.
 - **Stop at first failure** — later checks are marked skipped; no cascade
   noise.
 - **Ownership** — every process starts in its own process group and the whole
-  group is killed at the end of the run. No zombie port between runs.
+  group is killed on **every** exit path: normal end, probatum panic, SIGINT
+  (Ctrl-C) or SIGTERM. If probatum dies, nothing it started survives. No
+  zombie port between runs.
 - **Evidence** — every run writes `.probatum/runs/NNNN/`: frozen config, one
   log per check, `run.json` (versioned `schema` field).
 
@@ -100,6 +103,4 @@ takes the verification.
 
 ## Next
 
-1. Panic-safe teardown guard (ownership must hold even if probatum itself crashes).
-2. `probatum init` — drop a commented example config.
-3. New rules/sources only against real, recurring needs (e.g. `expect: [200, 204]`).
+New rules/sources only against real, recurring needs (e.g. `expect: [200, 204]`).

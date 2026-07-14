@@ -750,6 +750,26 @@ largely carries over as noted in the pivot section.
 - Still open, next: the panic-safe teardown guard (ownership on probatum's own
   crash paths), `probatum init`, product tagline.
 
+### 2026-07-14 — Ownership on every exit path + `probatum init`
+
+- Owner confirmed: if probatum itself dies, everything it started must be
+  killed. Implemented as a lock-free process-group registry (`src/own.rs`,
+  async-signal-safe atomics): children register at spawn; the registry is
+  swept with SIGKILL on every exit path — normal end (explicit teardown),
+  panic unwinding (`Drop` guard, kill-only, non-panicking per the frozen
+  design), SIGINT and SIGTERM (signal handler, then `_exit(130)`).
+- Plain `run:` commands now also get their own process group: a command that
+  leaks background children gets swept at run end too.
+- Verified: panic mid-run (exit 101), SIGINT and SIGTERM mid-run (exit 130) —
+  port clean and no leftover processes in all three cases. A first "leak"
+  finding was a false positive: `pgrep -f` matched the test harness's own
+  command line.
+- Ceiling stated honestly: SIGKILL of probatum itself remains uncoverable (no
+  handler, no unwinding); that path leaks until a wrapper/supervisor exists.
+- `probatum init` ships: writes a commented `checks.yaml` example, refuses to
+  overwrite an existing one. First generated example had a YAML parse bug
+  (unquoted `:` in a scalar) — caught by running the generated file, fixed.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

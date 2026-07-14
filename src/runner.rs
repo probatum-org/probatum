@@ -72,6 +72,11 @@ struct Service {
 type LogBaseline = Option<(u64, u64)>;
 
 pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Result<RunReport> {
+    // Safety net: if this function exits ANY way (return, ?, panic unwinding),
+    // every registered process group gets killed. The explicit teardown below
+    // stays as the controlled path; this guard is the last line of defense.
+    let _own_guard = crate::own::Guard;
+
     let run_dir = next_run_dir()?;
     std::fs::create_dir_all(&run_dir)?;
     let frozen = run_dir.join("config.yaml");
@@ -132,6 +137,12 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
         out.push(report);
     }
 
+    // ponytail: test hook — proves the ownership guard on probatum's own crash
+    // path (services are alive right here). Not a user feature.
+    if std::env::var_os("PROBATUM_TEST_PANIC").is_some() {
+        panic!("PROBATUM_TEST_PANIC");
+    }
+
     // A service can misbehave after it became ready — scan every tracked
     // service's full output before the verdict.
     for svc in &services {
@@ -188,16 +199,21 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
 
 fn run_cmd(cmd: &str, contains: &[String], absent: &[String], log_file: &Path, check: &Check) -> CheckReport {
     let started = Instant::now();
-    let spawned = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn();
+    let spawned = {
+        use std::os::unix::process::CommandExt;
+        Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .process_group(0) // own group: a run that leaks background children gets swept too
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => return errored(check, log_file, format!("couldn't run: {e}")),
     };
+    crate::own::register(child.id());
     let (logs, handles) = capture::attach(&mut child, log_file.to_path_buf(), started);
     let status = child.wait();
     for h in handles {
@@ -269,6 +285,7 @@ fn run_service(
         Ok(c) => c,
         Err(e) => return errored(check, log_file, format!("couldn't start: {e}")),
     };
+    crate::own::register(child.id());
     let (logs, _handles) = capture::attach(&mut child, log_file.to_path_buf(), started);
 
     let track = |services: &mut Vec<Service>, child, logs: &CapturedLogs| {
