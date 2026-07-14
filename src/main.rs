@@ -13,14 +13,10 @@ use anyhow::{bail, Context, Result};
 use std::io::Read;
 
 fn main() {
+    // Exit codes: 0 = all passed, 1 = at least one check failed,
+    // 2 = couldn't run (invalid config, dirty environment, tool error).
     let code = match real_main() {
-        Ok(violated) => {
-            if violated {
-                1
-            } else {
-                0
-            }
-        }
+        Ok(code) => code,
         Err(e) => {
             eprintln!("probatum: {e:#}");
             2
@@ -29,7 +25,7 @@ fn main() {
     std::process::exit(code);
 }
 
-fn real_main() -> Result<bool> {
+fn real_main() -> Result<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut json = false;
     let mut seed: Option<u32> = None;
@@ -68,16 +64,20 @@ fn real_main() -> Result<bool> {
         (s, path.clone())
     };
 
-    let m = manifest::parse(&text)?;
+    let checks = manifest::parse(&text)?;
     let seed = seed.unwrap_or_else(random_seed);
-    let report = runner::run(&m, &text, &source, seed)?;
+    let report = runner::run(&checks, &text, &source, seed)?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
         verdict::print(&report);
     }
-    Ok(report.verdict == "violated")
+    Ok(match report.verdict.as_str() {
+        "pass" => 0,
+        "fail" => 1,
+        _ => 2, // couldn't-run
+    })
 }
 
 /// Seed from /dev/urandom — recorded in the evidence so every run is replayable

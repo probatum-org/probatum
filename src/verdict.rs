@@ -1,80 +1,75 @@
-//! Verdict rendering: one glance tells you everything. Green = say it publicly.
-//! Red = the cause is already on screen, no log spelunking.
+//! Output: one glance. Green checks, and for reds the extracted cause — nothing
+//! else. No log spelunking.
 
 use crate::runner::{RunReport, Status};
 
 const RED: &str = "\x1b[31m";
 const GREEN: &str = "\x1b[32m";
+const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
 
-pub fn print(report: &RunReport) {
-    let violated = report.verdict == "violated";
-    let (mark, color) = if violated { ("✗", RED) } else { ("✓", GREEN) };
-
+pub fn print(r: &RunReport) {
     println!();
-    println!(
-        "{color}{BOLD}{mark} {} — {}{RESET}",
-        report.promise_id, report.promise_statement.trim()
-    );
-
-    for step in &report.steps {
-        match step.status {
+    for c in &r.checks {
+        match c.status {
             Status::Passed => {
-                let extra = step
+                let extra = c
                     .detail
                     .as_deref()
                     .map(|d| format!(" {DIM}({d}){RESET}"))
                     .unwrap_or_default();
-                println!("  {GREEN}✓{RESET} step {}/{} {}{extra}", step.index, report.steps.len(), step.label);
+                println!("  {GREEN}✓{RESET} {}{extra}", c.label);
+            }
+            Status::Errored => {
+                println!(
+                    "  {YELLOW}⚠{RESET} {} {DIM}({}){RESET}",
+                    c.label,
+                    c.detail.as_deref().unwrap_or("couldn't run")
+                );
             }
             Status::Skipped => {
-                println!("  {DIM}– step {}/{} {} (non exécuté){RESET}", step.index, report.steps.len(), step.label);
+                println!("  {DIM}– {} (skipped){RESET}", c.label);
             }
             Status::Failed => {
                 println!(
-                    "  {RED}✗ step {}/{} {} — FAILED{RESET} {DIM}({}){RESET}",
-                    step.index,
-                    report.steps.len(),
-                    step.label,
-                    step.detail.as_deref().unwrap_or("")
+                    "  {RED}✗ {}{RESET} {DIM}({}){RESET}",
+                    c.label,
+                    c.detail.as_deref().unwrap_or("failed")
                 );
-                if let Some(cause) = &step.cause {
-                    println!("    ├─ cause : {}", cause.headline.trim());
+                if let Some(cause) = &c.cause {
+                    println!("      {}", cause.headline.trim());
                     for line in &cause.correlated {
-                        println!("    │    {DIM}{line}{RESET}");
+                        println!("        {DIM}{line}{RESET}");
                     }
                 }
             }
         }
     }
 
-    for oracle in &report.oracles {
-        if oracle.held {
-            println!("  {GREEN}✓{RESET} oracle {}", oracle.label);
-        } else {
+    println!();
+    match r.verdict.as_str() {
+        "pass" => {
+            println!("{GREEN}{BOLD}✓ all passed{RESET} {DIM}({} checks){RESET}", r.checks.len());
+        }
+        "couldn't-run" => {
             println!(
-                "  {RED}✗ oracle {} — {}{RESET}",
-                oracle.label,
-                oracle.detail.as_deref().unwrap_or("violé")
+                "{YELLOW}{BOLD}⚠ couldn't run{RESET} {DIM}({} check(s) — no failures observed){RESET}",
+                r.errored
             );
-            for v in oracle.violations.iter().take(4) {
-                println!("    │    {DIM}{v}{RESET}");
+        }
+        _ => {
+            let mut parts = vec![format!("{} failed", r.failed)];
+            if r.errored > 0 {
+                parts.push(format!("{} couldn't run", r.errored));
             }
+            if r.skipped > 0 {
+                parts.push(format!("{} skipped", r.skipped));
+            }
+            println!("{RED}{BOLD}✗ {}{RESET}", parts.join(" · "));
         }
     }
-
-    for note in &report.context_notes {
-        println!("  ├─ contexte : {note}");
-    }
-    println!("  └─ artefacts : {}/  {DIM}(logs complets, manifeste, run.json, seed {}){RESET}", report.run_dir, report.seed);
-
-    println!();
-    if violated {
-        println!("{RED}{BOLD}1 promesse violée{RESET} — rejouer : {BOLD}{}{RESET}", report.replay);
-    } else {
-        println!("{GREEN}{BOLD}promesse tenue{RESET} {DIM}— {}{RESET}", report.replay);
-    }
+    println!("{DIM}  logs: {}{RESET}", r.run_dir);
     println!();
 }

@@ -1,86 +1,105 @@
 # probatum
 
-> Don't trust the promise. Run the proof.
-
-`probatum` runs a **proof manifest**: a promise, steps, oracles. One command,
-one verdict. Green: everything holds. Red: the cause is already on screen —
-correlated logs, context, complete artifacts, replay seed.
-
-## v0 — what works
+Test-oriented runner: **one config file, embedded checks, only the failures
+that matter**. Like a Makefile or Taskfile, but built for verification — the
+curl, the grep and the process supervision are built in; you declare the rules
+that make a check pass or fail.
 
 ```bash
-probatum run proofs/dev-check.yaml           # human verdict (terminal)
-probatum run proofs/dev-check.yaml --json    # machine verdict (AI agents, CI)
-probatum run proofs/dev-check.yaml --seed N  # referenced replay
-cat manifest.yaml | probatum run -           # manifest from stdin — no temp file
+probatum run checks.yaml            # human verdict
+probatum run checks.yaml --json     # machine verdict (agents, CI)
+cat checks.yaml | probatum run -    # config from stdin — no temp file
 ```
 
-For agents and other chainers, `--json` is a versioned contract: `run.json`
-carries a `schema` field, and `replay` always references the manifest **frozen**
-under the run dir (`.probatum/runs/NNNN/manifest.yaml`), so a run replays from its
-own evidence regardless of what the source path did afterwards.
+## The config
 
-Manifest (strictly declarative — no logic, closed vocabulary):
+A check = one **source** + flat **rules**. No logic, no nesting, no plugins.
 
 ```yaml
-proof: dev-check
-promise:
-  id: DEV-000
-  statement: The build is healthy — tests pass, the service boots, no error log at startup.
-steps:
-  - suite.run:     {cmd: "bash demo-app/tests/run.sh"}
-  - service.start: {cmd: "python3 demo-app/app.py", ready: "http://127.0.0.1:8087/healthz", timeout: 15}
-  - api.check:     {get: "http://127.0.0.1:8087/api/version", expect: 200}
-oracles:
-  - logs.clean: {level: error, allow: ["migration pending"]}
+# setup is just a check: an operation + rules (here: exit 0)
+- name: clean slate
+  run: docker compose down -v --remove-orphans
+
+# commands — exit code is the authority
+- run: cargo test
+- run: cargo clippy -- -D warnings
+
+# a service — start it, wait until it answers, keep it alive for what follows
+- name: api boots
+  run: ./target/debug/myapp --port 8080
+  ready: http://127.0.0.1:8080/healthz
+  timeout: 15
+  allow: ["migration pending"]        # known noise, ignored by the crash filter
+
+# embedded curl
+- get: http://127.0.0.1:8080/api/version
+  expect: 200
+  contains: ['"version"']
+
+# embedded grep — external log file, only lines written during THIS run
+- name: app log is clean
+  log: /var/log/myapp/app.log
+  contains: ["migrations applied"]
+  absent: ["ERROR", "panic"]
 ```
 
-Non-negotiable principles (v0 → vN):
+Sources: `run:` (command), `run:` + `ready:`/`timeout:` (service), `get:`
+(HTTP), `log:` (external file). Rules: `expect` (HTTP status), `contains`
+(must appear), `absent` (must not appear), `allow` (exempt lines from the
+service crash filter), `name` (display label). Unknown keys are rejected —
+a typo must never silently skip a check.
 
-- **The runner owns what it launches**: continuous capture of everything
-  (timestamped stdout/stderr), supervision, teardown by process group — never an
-  orphan environment.
-- **Deterministic diagnosis**: panic/FATAL first, otherwise the last ERROR, with
-  correlated lines. No AI in the verdict.
-- **Evidence by construction**: every run writes `.probatum/runs/NNNN/` — frozen
-  manifest, complete logs, `run.json`, seed.
-- **Two readers**: the human (terminal block) and the agent (`--json`).
+## The contract
 
-## Intended use
+- **Defaults per source** — `run`: non-zero exit fails; explicit
+  `contains`/`absent` apply to the output even on exit 0; no implicit crash
+  markers (a passing `cargo test` may print "panicked at"). **Service**: the
+  crash filter (panic, traceback, FATAL) is on by default — there is no exit
+  code to trust while it runs. **`get`**: omitted `expect` = any 2xx.
+  **`log`**: at least one rule required.
+- **failed ≠ couldn't run** — a bad result (`✗`, exit 1) is not the same as
+  "couldn't observe" (`⚠`, exit 2: missing binary, unreachable URL, log file
+  replaced/truncated mid-run, dirty environment). A false "failed" makes you
+  chase ghosts.
+- **Log window** — `log:` files are read from their size at run start; only
+  new lines count. Pre-existing content is normal. Replacement or truncation
+  during the run makes the window ambiguous → couldn't-run.
+- **Clean environment, detected not destroyed** — if the `ready:` URL already
+  answers before the service starts, the run refuses (`environment not
+  clean`). probatum never purges what it doesn't own: your cleanup is your
+  own first `- run:` check.
+- **Stop at first failure** — later checks are marked skipped; no cascade
+  noise.
+- **Ownership** — every process starts in its own process group and the whole
+  group is killed at the end of the run. No zombie port between runs.
+- **Evidence** — every run writes `.probatum/runs/NNNN/`: frozen config, one
+  log per check, `run.json` (versioned `schema` field).
 
-probatum is the single, clean-output executor for **static and/or dynamic checks
-— including LLM-generated ones**. An agent runs one manifest and reads one verdict
-instead of chaining shell commands and drowning in their output; a human stops
-writing Makefiles, Taskfiles and command-stuffed scripts, because the manifest
-*is* the declarative "what to prove". The first reader is the agent (via `--json`)
-and the human looking over its shoulder.
+Exit codes: `0` all passed · `1` at least one check failed · `2` couldn't run
+(invalid config, dirty environment, tool error).
 
 ## Demo
 
-`demo-app/` is an event-sourced app whose unit tests mock the store: they pass,
-but the real boot replays the WAL — and segment 0004 is missing.
-Run `rm demo-app/data/wal/segment-0004.json` then
-`probatum run proofs/dev-check.yaml` to see the red verdict with the extracted
-cause.
+`demo-app/` is an event-sourced app whose unit tests mock the store: they
+pass, but the real boot replays the WAL. Break it and watch the cause surface:
 
-## Backlog (in order)
+```bash
+rm demo-app/data/wal/segment-0004.json
+probatum run checks/dev-check.yaml
+#   ✓ bash demo-app/tests/run.sh (test result: ok. 142 passed)
+#   ✗ app boots (crashed at startup after 0.3s)
+#       FATAL boot aborted: cannot rebuild state without segment 0004
+```
 
-1. `service.stop` / `service.restart` / `network.cut` — the perturbations, the reputation.
-2. `state.snapshot` / `state.diff` — the differential oracle.
-3. Playwright driver, Compose driver (topologies).
-4. `matrix:` — deterministic mutations driven by the seed.
-5. Promise registry + `evidence/` per release.
-6. MCP server — the agent calls `probatum.run`, receives the verdict.
+## What probatum will never be
 
-## Dogfooding
+No dependency graphs, no conditions or logic in the config, no log
+aggregation, no plugin system, no CI orchestration. The day the config needs
+an `if`, the design has failed. Build/deploy stay in your Makefile; probatum
+takes the verification.
 
-The first system tested by probatum is probatum. First promises:
+## Next
 
-- `PROOF-001`: two runs with the same seed yield the same verdict.
-- `PROOF-002`: a run never leaves an orphan environment behind.
-- `PROOF-003`: the evidence directory is complete even when the run blows up.
-
-> **Status (2026-07-14): these three promises are not yet honored** — see
-> [DISCUSSION.md](DISCUSSION.md). PROOF-001 is currently vacuous (the seed drives
-> nothing), PROOF-002 leaks on the timeout/panic paths, PROOF-003 has no crash
-> guard. Making them truly green is the priority before extending the vocabulary.
+1. Panic-safe teardown guard (ownership must hold even if probatum itself crashes).
+2. `probatum init` — drop a commented example config.
+3. New rules/sources only against real, recurring needs (e.g. `expect: [200, 204]`).
