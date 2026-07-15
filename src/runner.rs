@@ -49,14 +49,17 @@ pub struct RunReport {
     pub replay: String,
 }
 
-/// Crash markers that always count as a failure in a running service's logs.
-/// They do NOT apply to a plain `run:` — its exit code is the authority
+/// Default markers that fail a running service's logs (crash class + error
+/// class, per the frozen contract: "panic, traceback, FATAL, ERROR out of the
+/// box"). They do NOT apply to a plain `run:` — its exit code is the authority
 /// (a passing `cargo test` may legitimately print "panicked at").
-const CRITICAL: [&str; 4] = [
+const CRITICAL: [&str; 6] = [
     "panicked at",
     "FATAL",
     "Traceback (most recent call last)",
     "fatal:",
+    "ERROR",
+    "error:",
 ];
 
 struct Service {

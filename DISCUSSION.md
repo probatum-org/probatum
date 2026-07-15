@@ -770,6 +770,26 @@ largely carries over as noted in the pivot section.
   overwrite an existing one. First generated example had a YAML parse bug
   (unquoted `:` in a scalar) — caught by running the generated file, fixed.
 
+### 2026-07-14 — Dogfooding: probatum checks probatum
+
+- A root `checks.yaml` now runs probatum on itself: build, clippy, the demo
+  end-to-end (service + HTTP + external log), and two inverted negative
+  scenarios asserting exit code exactly 1 ("probatum MUST report this as a
+  caught failure; exit 2 would mean couldn't-run").
+- One mock, several failure stories via env switches on `demo-app/app.py`
+  instead of several mock apps: `WAL_DIR` (boot crash), `DEGRADE=1` (ready,
+  then logs ERROR), `LOG_FILE` (writes an external log for `log:` checks).
+- **The dogfooding caught a real bug on its first run**: the degraded mock
+  logged ERROR after readiness and probatum said "all passed" — the service
+  default filter only had crash-class markers (panic/FATAL/traceback) while
+  the frozen contract says "panic, traceback, FATAL, ERROR out of the box".
+  Doc/code gap fixed (ERROR/error: added to the service default markers).
+- Side validation: the three nested runs share port 8087 sequentially, so any
+  teardown leak would trip the dirty-env refusal on the next run — ownership
+  is implicitly re-proven on every dogfooding run.
+- This replaces the pre-pivot PROOF-001/002/003 idea in the product's own
+  language: the acceptance tests are a probatum config.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

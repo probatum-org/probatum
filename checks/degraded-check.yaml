@@ -1,0 +1,7 @@
+# Negative scenario: the app becomes ready, THEN logs an ERROR — the post-ready
+# crash filter must catch it. Used inverted by the root checks.yaml (expects exit 1).
+- name: app boots then degrades
+  run: DEGRADE=1 python3 demo-app/app.py
+  ready: http://127.0.0.1:8087/healthz
+  timeout: 10
+- run: sleep 1

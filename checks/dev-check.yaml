@@ -2,7 +2,7 @@
 #   probatum run checks/dev-check.yaml
 - run: bash demo-app/tests/run.sh
 - name: app boots
-  run: python3 demo-app/app.py
+  run: LOG_FILE=demo-app/data/app.log python3 demo-app/app.py
   ready: http://127.0.0.1:8087/healthz
   timeout: 15
   allow: ["migration pending"]
@@ -10,3 +10,7 @@
   contains: ['"version"']
 - get: http://127.0.0.1:8087/api/nope
   expect: 404
+- name: app log is clean
+  log: demo-app/data/app.log
+  contains: ["store::replay done"]
+  absent: ["ERROR"]

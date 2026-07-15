@@ -1,0 +1,15 @@
+# probatum checks probatum — dogfooding.
+#   probatum run checks.yaml
+- run: cargo build --offline
+- run: cargo clippy --offline -- -D warnings
+
+# the full demo flow (service + http + external log) must be green
+- name: demo is green end-to-end
+  run: ./target/debug/probatum run checks/dev-check.yaml
+
+# negative scenarios: probatum MUST report these as failures (exit 1 exactly —
+# exit 2 would mean "couldn't run", which is not a caught failure)
+- name: boot crash is caught
+  run: "./target/debug/probatum run checks/broken-check.yaml; test $? -eq 1"
+- name: post-ready degradation is caught
+  run: "./target/debug/probatum run checks/degraded-check.yaml; test $? -eq 1"

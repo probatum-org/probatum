@@ -1,0 +1,6 @@
+# Negative scenario: the WAL is gone — the boot must crash and probatum must
+# extract the FATAL cause. Used inverted by the root checks.yaml (expects exit 1).
+- name: app boots (meant to fail)
+  run: WAL_DIR=/nonexistent python3 demo-app/app.py
+  ready: http://127.0.0.1:8087/healthz
+  timeout: 10

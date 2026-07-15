@@ -11,12 +11,21 @@ import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-WAL_DIR = os.path.join(os.path.dirname(__file__), "data", "wal")
+# Env switches let this one mock play several failure stories:
+#   WAL_DIR=/nonexistent  -> crash at boot (missing segment)
+#   DEGRADE=1             -> become ready, then log an ERROR (degrades after readiness)
+#   LOG_FILE=path         -> also append log lines to an external file (log: checks)
+WAL_DIR = os.environ.get("WAL_DIR") or os.path.join(os.path.dirname(__file__), "data", "wal")
 SEGMENTS = ["0001", "0002", "0003", "0004"]
 
 
 def log(level, msg):
-    print(f"{level} {msg}", flush=True)
+    line = f"{level} {msg}"
+    print(line, flush=True)
+    lf = os.environ.get("LOG_FILE")
+    if lf:
+        with open(lf, "a") as f:
+            f.write(line + "\n")
 
 
 def replay_wal():
@@ -61,4 +70,9 @@ if __name__ == "__main__":
     STATE = replay_wal()
     time.sleep(0.2)
     log("INFO", "listening on 127.0.0.1:8087")
+    if os.environ.get("DEGRADE"):
+        import threading
+        threading.Timer(
+            0.3, lambda: log("ERROR", "cache backend unreachable, serving stale data")
+        ).start()
     HTTPServer(("127.0.0.1", 8087), Handler).serve_forever()
