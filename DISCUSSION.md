@@ -220,6 +220,42 @@ State note: the committed code (`d4712f2`) still implements the pre-pivot
 design; an uncommitted working-tree rewrite implements most of the new one
 (see journal).
 
+### Boundary with cidx (2026-07-15)
+
+The owner also maintains [cidx](https://github.com/cidx-org/cidx), a
+declarative CI/CD runner: `cidx.toml` declares *tools* to run against the
+source (trivy, gitleaks, golangci-lint, go-test…), containerized via presets,
+grouped in phases and pipelines, with GitHub/GitLab workflow generation.
+
+Not a duplicate — the two verify different objects:
+
+- **cidx**: the *code*, statically — which scanners/linters/test tools run,
+  identically local and CI.
+- **probatum**: the *running system*, dynamically — boot, readiness, HTTP
+  behavior, log window, teardown. cidx has none of that machinery.
+
+The honest overlap: both can run an arbitrary command, so a custom cidx stage
+*could* script its way to the same checks. probatum's value inside that
+overlap is concentration: embedded primitives, process ownership, the noise
+filter, failed ≠ couldn't-run, and the agent-readable verdict — one powerful,
+expressive check runner instead of a pile of stage scripts.
+
+Sharing rule: *run a tool against my sources* → cidx stage; *start my system
+and observe its behavior* → probatum.
+
+**Owner's decision**: probatum maps to the **test phase of the DevOps loop** —
+in cidx terms it belongs to `cidx run test` (e.g. `[test] containers =
+["go-test", "probatum"]`), not to a separate phase. Do not re-declare
+lint/scan/unit-test stages inside `probatum.yaml` in repos that have cidx
+(the probatum repo's own build+clippy checks are the dogfooding exception).
+
+Guardrails both ways: if probatum ever wants phases/pipelines/presets it is
+becoming cidx — refuse; if cidx ever wants readiness/process ownership it is
+becoming probatum — same.
+
+Integration work item (packaging, not design): a static musl binary or a
+small image so probatum fits cidx's containerized presets.
+
 ## Current project principles
 
 *Historical pre-pivot wording. The ownership, deterministic diagnosis and dual
@@ -803,6 +839,20 @@ largely carries over as noted in the pivot section.
   degraded-check) and `.probatum/runs/` for evidence (ignored).
 - `probatum init` now writes `probatum.yaml`; a bare `probatum run` without a
   config gives a helpful error pointing at init.
+
+### 2026-07-15 — Boundary with cidx settled
+
+- Reviewed the owner's cidx project against probatum: no structural duplicate
+  (tools-against-source vs behavior-of-running-system), one honest overlap
+  strip (any command runs in either).
+- Owner's framing accepted: custom cidx stages could reach the same result,
+  but probatum concentrates those tests into one more powerful, more
+  expressive runner — both tools are good, each keeps its lane.
+- Decision: probatum belongs to the **test phase** of the DevOps loop —
+  `cidx run test` includes it (preset alongside e.g. go-test), no separate
+  smoke phase. Boundary and both-ways guardrails recorded above.
+- Deferred packaging item: static binary or small image for cidx's
+  containerized presets.
 
 ### 2026-07-14 — Post-pivot semantic cleanup
 
