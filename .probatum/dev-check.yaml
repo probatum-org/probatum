@@ -1,5 +1,5 @@
 # The everyday file: one command, one verdict.
-#   probatum run checks/dev-check.yaml
+#   probatum run .probatum/dev-check.yaml
 - run: bash demo-app/tests/run.sh
 - name: app boots
   run: LOG_FILE=demo-app/data/app.log python3 demo-app/app.py

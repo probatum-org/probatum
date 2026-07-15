@@ -558,6 +558,11 @@ non-vacuous.
 - Kept from before, renamed or unchanged: failed ≠ couldn't-run (was violated ≠
   inconclusive); strict unknown-key rejection; `--json` versioned schema;
   ownership/teardown as the core guarantee.
+- **Naming convention (owner's choice)**: tool = file = directory. The default
+  config is `probatum.yaml` at the repo root (`probatum run` with no argument
+  finds it, like make/Makefile); `.probatum/` holds secondary check files
+  (committed) and `.probatum/runs/` the evidence (ignored). "checks.yaml" was
+  too generic.
 
 ### Pre-pivot (historical)
 
@@ -789,6 +794,15 @@ largely carries over as noted in the pivot section.
   is implicitly re-proven on every dogfooding run.
 - This replaces the pre-pivot PROOF-001/002/003 idea in the product's own
   language: the acceptance tests are a probatum config.
+
+### 2026-07-14 — Naming: probatum.yaml / .probatum/
+
+- Owner rejected "checks.yaml" as too generic; chose the tool-name convention:
+  `probatum.yaml` (default config, found by a bare `probatum run`),
+  `.probatum/` for secondary configs (committed: dev-check, broken-check,
+  degraded-check) and `.probatum/runs/` for evidence (ignored).
+- `probatum init` now writes `probatum.yaml`; a bare `probatum run` without a
+  config gives a helpful error pointing at init.
 
 ### 2026-07-14 — Post-pivot semantic cleanup
 

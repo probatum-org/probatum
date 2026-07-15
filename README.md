@@ -6,11 +6,15 @@ curl, the grep and the process supervision are built in; you declare the rules
 that make a check pass or fail.
 
 ```bash
-probatum init                       # drop a commented example checks.yaml
-probatum run checks.yaml            # human verdict
-probatum run checks.yaml --json     # machine verdict (agents, CI)
-cat checks.yaml | probatum run -    # config from stdin — no temp file
+probatum init                       # drop a commented example probatum.yaml
+probatum run                        # runs ./probatum.yaml (like make & Makefile)
+probatum run --json                 # machine verdict (agents, CI)
+cat some.yaml | probatum run -      # config from stdin — no temp file
 ```
+
+Convention: `probatum.yaml` at the repo root is the default config;
+`.probatum/` holds secondary check files (committed) and `.probatum/runs/`
+the evidence of each run (ignored).
 
 ## The config
 
@@ -88,11 +92,14 @@ pass, but the real boot replays the WAL. Break it and watch the cause surface:
 
 ```bash
 rm demo-app/data/wal/segment-0004.json
-probatum run checks/dev-check.yaml
+probatum run .probatum/dev-check.yaml
 #   ✓ bash demo-app/tests/run.sh (test result: ok. 142 passed)
 #   ✗ app boots (crashed at startup after 0.3s)
 #       FATAL boot aborted: cannot rebuild state without segment 0004
 ```
+
+The repo also dogfoods itself: `probatum run` at the root builds, lints, runs
+the demo end-to-end and asserts the negative scenarios are caught (exit 1).
 
 ## What probatum will never be
 

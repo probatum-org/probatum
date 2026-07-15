@@ -26,7 +26,8 @@ fn main() {
     std::process::exit(code);
 }
 
-const USAGE: &str = "usage: probatum run <checks.yaml>|- [--json] [--seed N] | probatum init";
+const USAGE: &str = "usage: probatum run [probatum.yaml|-] [--json] [--seed N] | probatum init";
+const DEFAULT_CONFIG: &str = "probatum.yaml";
 
 fn real_main() -> Result<i32> {
     own::install_signal_handlers(); // Ctrl-C/kill must not leave orphans
@@ -53,8 +54,12 @@ fn real_main() -> Result<i32> {
         Some("init") => return init(),
         _ => bail!("{USAGE}"),
     }
-    let Some(path) = positional.get(1) else {
-        bail!("{USAGE}");
+    // No path? The convention file is right there — like make and Makefile.
+    let default = DEFAULT_CONFIG.to_string();
+    let path = match positional.get(1) {
+        Some(p) => p,
+        None if std::path::Path::new(DEFAULT_CONFIG).exists() => &default,
+        None => bail!("no {DEFAULT_CONFIG} here — run `probatum init` or pass a path\n{USAGE}"),
     };
 
     // Manifest source: a file, or `-` for stdin (agents pipe an in-memory manifest).
@@ -88,16 +93,17 @@ fn real_main() -> Result<i32> {
 
 /// `probatum init` — drop a commented example config to copy and edit.
 fn init() -> Result<i32> {
-    let path = std::path::Path::new("checks.yaml");
+    let path = std::path::Path::new(DEFAULT_CONFIG);
     if path.exists() {
-        bail!("checks.yaml already exists — not overwriting it");
+        bail!("{DEFAULT_CONFIG} already exists — not overwriting it");
     }
-    std::fs::write(path, EXAMPLE).map_err(|e| anyhow::anyhow!("can't write checks.yaml: {e}"))?;
-    println!("wrote checks.yaml — edit it, then: probatum run checks.yaml");
+    std::fs::write(path, EXAMPLE)
+        .map_err(|e| anyhow::anyhow!("can't write {DEFAULT_CONFIG}: {e}"))?;
+    println!("wrote {DEFAULT_CONFIG} — edit it, then: probatum run");
     Ok(0)
 }
 
-const EXAMPLE: &str = r#"# checks.yaml — probatum run checks.yaml
+const EXAMPLE: &str = r#"# probatum.yaml — probatum run
 # A check = one source (run / get / log) + flat rules. Unknown keys are errors.
 
 # a command — passes if it exits 0
