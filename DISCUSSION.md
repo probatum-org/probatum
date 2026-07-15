@@ -256,6 +256,17 @@ becoming probatum — same.
 Integration work item (packaging, not design): a static musl binary or a
 small image so probatum fits cidx's containerized presets.
 
+**Decided (2026-07-15): separate tools, linked by a preset — no merge.**
+cidx never absorbs its tools (trivy, gitleaks, go-test are all external
+binaries it orchestrates); probatum joins that roster like any other. cidx
+launches everything *too*, not *exclusively*: the inner loop (a dev or an
+agent, in seconds) calls `probatum run` directly; the outer loop (pipeline,
+CI) reaches it through `cidx run test`. Both paths read the same
+`probatum.yaml` — two launchers, one source of truth. Reinforcing reasons:
+containerized cidx vs native process ownership, Go vs Rust and different
+release rhythms, and probatum's non-cidx uses (MCP/agents, repos without
+cidx).
+
 ## Current project principles
 
 *Historical pre-pivot wording. The ownership, deterministic diagnosis and dual
@@ -853,6 +864,10 @@ largely carries over as noted in the pivot section.
   smoke phase. Boundary and both-ways guardrails recorded above.
 - Deferred packaging item: static binary or small image for cidx's
   containerized presets.
+- Follow-up question settled: **separate tools, no merge into cidx**. cidx
+  orchestrates external tools by design; probatum joins the roster as one of
+  them. Inner loop = `probatum run` direct; outer loop = `cidx run test` via
+  preset; both read the same `probatum.yaml` (one source of truth).
 
 ### 2026-07-14 — Post-pivot semantic cleanup
 
