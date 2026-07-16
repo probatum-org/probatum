@@ -2,7 +2,8 @@
 name = "probatum"
 version = "0.1.0"
 edition = "2021"
-description = "Don't trust the promise. Run the proof."
+description = "Test-oriented check runner: one config, embedded checks, only the failures that matter."
+license = "MIT"
 
 [dependencies]
 anyhow = "1"
