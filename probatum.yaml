@@ -3,6 +3,11 @@
 - run: cargo build --offline
 - run: cargo clippy --offline -- -D warnings
 
+# --help must stay a complete, self-sufficient description of the surface
+- name: --help documents the config surface
+  run: ./target/debug/probatum --help
+  contains: ["run:", "get:", "log:", "exit codes", "probatum init"]
+
 # the full demo flow (service + http + external log) must be green
 - name: demo is green end-to-end
   run: ./target/debug/probatum run .probatum/dev-check.yaml

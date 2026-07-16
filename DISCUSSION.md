@@ -901,6 +901,24 @@ largely carries over as noted in the pivot section.
 - `.probatum/invalid-key.yaml` is committed *intentionally invalid* — it
   exists to be refused.
 
+### 2026-07-15 — Agent adoption story: self-describing tool + in-context snippet
+
+- Question raised: separate agent doc, or keep the human README? Settled on
+  the layered model, from the agent's actual perspective:
+  1. the target repo's CLAUDE.md/AGENTS.md is injected into agent context
+     (the README is not) → a 5-line Verification snippet there is THE lever;
+  2. agents learn fastest from executable truth: `--help`, teaching error
+     messages, `probatum init`'s runnable example;
+  3. the README stays the single source of truth — no FOR_AGENTS.md
+     paraphrase (duplication drifts).
+- Implemented: full `probatum --help` (the whole config surface, defaults,
+  exit codes, ownership guarantee in ~40 lines — an agent can use probatum
+  from this text alone); README section "Adopting probatum in a repo" with
+  two ready-to-paste blocks (the CLAUDE.md snippet + the one-time migration
+  prompt, both self-sufficient — no external URLs).
+- Dogfooded: a check asserts --help stays complete (`contains` on the key
+  surface terms). Suite is now 11 checks.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

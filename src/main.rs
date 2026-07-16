@@ -29,10 +29,52 @@ fn main() {
 const USAGE: &str = "usage: probatum run [probatum.yaml|-] [--json] [--seed N] | probatum init";
 const DEFAULT_CONFIG: &str = "probatum.yaml";
 
+/// The whole product in one --help: an agent (or a human) can use probatum
+/// correctly from this text alone, no external docs needed.
+const HELP: &str = "\
+probatum — test-oriented check runner. One config, embedded checks,
+only the failures that matter.
+
+usage:
+  probatum init                 write a commented example probatum.yaml
+  probatum run [file|-]         run checks (default ./probatum.yaml, - = stdin)
+      --json                    machine-readable verdict on stdout
+      --seed N                  replay reference
+
+config: a flat YAML list. one check = one source + flat AND rules.
+  - run: <cmd>                  command; exit code is the authority
+    contains: [..]              output must contain (applies even on exit 0)
+    absent: [..]                output must not contain
+  - run: <cmd>                  with ready:/timeout: it becomes a service:
+    ready: <url>                started, polled until 2xx, kept alive
+    timeout: <secs>             not ready in time = failed
+    allow: [..]                 exempt known noise from the default crash
+                                filter (panic/traceback/FATAL/ERROR — on for
+                                services, off for plain commands)
+  - get: <url>                  HTTP GET; omitted expect = any 2xx
+    expect: <code>              exact status
+    contains: [..]              body must contain
+  - log: <path>                 external file, only lines written during THIS
+    contains: [..]              run count; at least one rule required
+    absent: [..]
+  name: <label>                 optional display name on any check
+
+unknown keys are errors. checks run top to bottom and stop at the first
+failure. every spawned process group is killed on every exit path — even if
+probatum crashes or is Ctrl-C'd.
+
+exit codes: 0 all passed · 1 a check failed (cause on screen) · 2 couldn't
+run (invalid config, dirty environment, unobservable target — fix the env,
+don't force). evidence: .probatum/runs/NNNN/ (frozen config, logs, run.json)";
+
 fn real_main() -> Result<i32> {
     own::install_signal_handlers(); // Ctrl-C/kill must not leave orphans
 
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("{HELP}");
+        return Ok(0);
+    }
     let mut json = false;
     let mut seed: Option<u32> = None;
     let mut positional: Vec<String> = Vec::new();

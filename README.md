@@ -144,6 +144,41 @@ aggregation, no plugin system, no CI orchestration. The day the config needs
 an `if`, the design has failed. Build/deploy stay in your Makefile; probatum
 takes the verification.
 
+## Adopting probatum in a repo
+
+Two ready-to-paste blocks. The tool is self-describing (`probatum --help`
+covers the full config surface), so neither block depends on external docs.
+
+**1. For every future AI session** — drop this in the target repo's
+`CLAUDE.md` (or `AGENTS.md`; agents get this injected into context, unlike
+the README):
+
+```text
+## Verification
+This repo uses probatum (test-oriented check runner).
+- Verify ANY change with `probatum run` — exit 0 = pass, 1 = a check failed
+  (cause on screen), 2 = couldn't run (fix the environment, don't force).
+- Config: `probatum.yaml` at the root — flat checks (run/get/log +
+  contains/absent/expect). `probatum --help` documents the full surface.
+- Parsing results? `probatum run --json`.
+- New behavior or bugfix → add a check to probatum.yaml, not an ad-hoc script.
+```
+
+**2. One-time migration** — paste this prompt to your agent in the target
+repo:
+
+```text
+Adopt probatum in this repo (run `probatum --help` first — it documents the
+whole config surface):
+1. Run `probatum init`.
+2. Migrate the VERIFICATION targets from the Makefile/Taskfile/scripts into
+   probatum.yaml: smoke tests, service boot + healthchecks, HTTP checks,
+   log greps. Leave build/deploy targets where they are.
+3. Add the probatum Verification section to this repo's CLAUDE.md.
+4. Prove it before finishing: `probatum run` must pass green, AND
+   deliberately breaking the service must be caught (exit 1).
+```
+
 ## Packaging
 
 ```bash
