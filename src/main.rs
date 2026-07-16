@@ -85,7 +85,10 @@ fn real_main() -> Result<i32> {
             "--json" => json = true,
             "--seed" => {
                 let v = it.next().unwrap_or_default();
-                seed = Some(v.parse().map_err(|_| anyhow::anyhow!("--seed attend un entier"))?);
+                seed = Some(
+                    v.parse()
+                        .map_err(|_| anyhow::anyhow!("--seed attend un entier"))?,
+                );
             }
             _ => positional.push(a),
         }

@@ -938,6 +938,29 @@ largely carries over as noted in the pivot section.
   private and visibility is UI-only — flip to Public in the package settings,
   otherwise the preset's pull fails anonymously.
 
+### 2026-07-16 — Both-ways dogfooding: cidx runs in probatum
+
+- Owner made the repo/image public; cidx PR #160 merged (squash + branch
+  cleanup via `cidx pr merge`); anonymous pull of the GHCR image verified.
+- `cidx init` in probatum: phases security (trivy, gitleaks), code (clippy,
+  rustfmt), test (cargo-test + **probatum**), build (cargo-build). Full local
+  `cidx run ci` green in 13 s — including probatum running inside its own
+  GHCR container, launched by cidx. The loop closes both ways.
+- The in-container split, applied to probatum's own repo: the stock preset
+  runs ./probatum.yaml, which here needs the host toolchain (cargo, python3).
+  Project-level override (`.cidx/presets.toml`) points the container at
+  `.probatum/selfcheck.yaml` — a config that proves the *shipped image* works
+  (binary self-describes via --help rules, shell present). The full dogfooding
+  suite keeps running natively in ci.yml.
+- `prettier`/`commitizen` dropped from code phase (nothing to format, history
+  is not conventional-commits). `rustfmt` immediately caught unformatted code
+  — fixed with cargo fmt, dogfooding re-verified green.
+- **cidx-side improvement candidates found while integrating** (not probatum
+  work): the cargo-audit preset compiles the tool from source at runtime
+  (slow, fragile — failed here; dropped from probatum's security phase since
+  trivy already scans Cargo.lock); local `cidx` pull of dhi.io images asked
+  for auth while a plain `docker pull` succeeded anonymously.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

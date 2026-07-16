@@ -1,0 +1,9 @@
+# Runs INSIDE the probatum container image (cidx test phase): proves the
+# shipped image actually works — binary present, self-describing, shell
+# available for run: checks. The full dogfooding suite (probatum.yaml) needs
+# the host toolchain and runs natively in ci.yml.
+- name: probatum binary self-describes
+  run: probatum --help
+  contains: ["run:", "get:", "log:", "exit codes"]
+- name: shell is present for run checks
+  run: test -x /bin/sh

@@ -112,10 +112,21 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
             continue;
         }
         let report = match check {
-            Check::Run { cmd, contains, absent, .. } => {
-                run_cmd(cmd, contains, absent, &log_file, check)
-            }
-            Check::Service { cmd, ready, timeout_secs, contains, absent, allow, .. } => run_service(
+            Check::Run {
+                cmd,
+                contains,
+                absent,
+                ..
+            } => run_cmd(cmd, contains, absent, &log_file, check),
+            Check::Service {
+                cmd,
+                ready,
+                timeout_secs,
+                contains,
+                absent,
+                allow,
+                ..
+            } => run_service(
                 cmd,
                 ready.as_deref(),
                 *timeout_secs,
@@ -127,12 +138,25 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 out.len(),
                 &mut services,
             ),
-            Check::Get { url, expect, contains, .. } => {
-                run_get(url, *expect, contains, &log_file, check)
-            }
-            Check::Log { path, contains, absent, .. } => {
-                run_log(path, contains, absent, baselines.get(path).copied().flatten(), &log_file, check)
-            }
+            Check::Get {
+                url,
+                expect,
+                contains,
+                ..
+            } => run_get(url, *expect, contains, &log_file, check),
+            Check::Log {
+                path,
+                contains,
+                absent,
+                ..
+            } => run_log(
+                path,
+                contains,
+                absent,
+                baselines.get(path).copied().flatten(),
+                &log_file,
+                check,
+            ),
         };
         if report.status == Status::Failed || report.status == Status::Errored {
             halted = true;
@@ -196,11 +220,21 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
         checks: out,
         replay: format!("probatum run {} --seed {}", frozen.display(), seed),
     };
-    std::fs::write(run_dir.join("run.json"), serde_json::to_string_pretty(&report)?).ok();
+    std::fs::write(
+        run_dir.join("run.json"),
+        serde_json::to_string_pretty(&report)?,
+    )
+    .ok();
     Ok(report)
 }
 
-fn run_cmd(cmd: &str, contains: &[String], absent: &[String], log_file: &Path, check: &Check) -> CheckReport {
+fn run_cmd(
+    cmd: &str,
+    contains: &[String],
+    absent: &[String],
+    log_file: &Path,
+    check: &Check,
+) -> CheckReport {
     let started = Instant::now();
     let spawned = {
         use std::os::unix::process::CommandExt;
@@ -228,10 +262,22 @@ fn run_cmd(cmd: &str, contains: &[String], absent: &[String], log_file: &Path, c
         Ok(s) if s.success() => {
             // Exit 0 — but explicit rules still apply to the output.
             if let Some(cause) = scan_lines(&lines, absent, &[], false) {
-                return report(check, log_file, Status::Failed, Some("error in output".into()), Some(cause));
+                return report(
+                    check,
+                    log_file,
+                    Status::Failed,
+                    Some("error in output".into()),
+                    Some(cause),
+                );
             }
             if let Some(missing) = find_missing(&lines, contains) {
-                return report(check, log_file, Status::Failed, Some(format!("output missing \"{missing}\"")), None);
+                return report(
+                    check,
+                    log_file,
+                    Status::Failed,
+                    Some(format!("output missing \"{missing}\"")),
+                    None,
+                );
             }
             report(check, log_file, Status::Passed, summarize(&lines), None)
         }
@@ -242,7 +288,13 @@ fn run_cmd(cmd: &str, contains: &[String], absent: &[String], log_file: &Path, c
                     correlated: diagnose::tail(&lines, 5),
                 })
             });
-            report(check, log_file, Status::Failed, Some(format!("exited {}", fmt_status(&s))), cause)
+            report(
+                check,
+                log_file,
+                Status::Failed,
+                Some(format!("exited {}", fmt_status(&s))),
+                cause,
+            )
         }
         Err(e) => errored(check, log_file, format!("couldn't run: {e}")),
     }
@@ -319,7 +371,10 @@ fn run_service(
                 check,
                 log_file,
                 Status::Failed,
-                Some(format!("crashed at startup after {:.1}s", started.elapsed().as_secs_f32())),
+                Some(format!(
+                    "crashed at startup after {:.1}s",
+                    started.elapsed().as_secs_f32()
+                )),
                 cause,
             );
         }
@@ -339,31 +394,54 @@ fn run_service(
         } else if started.elapsed() > Duration::from_millis(500) {
             // No readiness probe: consider started after a short grace period.
             track(services, child, &logs);
-            return report(check, log_file, Status::Passed, Some("started".into()), None);
+            return report(
+                check,
+                log_file,
+                Status::Passed,
+                Some("started".into()),
+                None,
+            );
         }
         if Instant::now() > deadline {
             let lines = logs.snapshot();
             let cause = diagnose::from_logs(&lines);
             track(services, child, &logs); // teardown will kill the group — no orphan
-            return report(check, log_file, Status::Failed, Some(format!("not ready in {timeout_secs}s")), cause);
+            return report(
+                check,
+                log_file,
+                Status::Failed,
+                Some(format!("not ready in {timeout_secs}s")),
+                cause,
+            );
         }
         std::thread::sleep(Duration::from_millis(150));
     }
 }
 
-fn run_get(url: &str, expect: Option<u16>, contains: &[String], log_file: &Path, check: &Check) -> CheckReport {
+fn run_get(
+    url: &str,
+    expect: Option<u16>,
+    contains: &[String],
+    log_file: &Path,
+    check: &Check,
+) -> CheckReport {
     match crate::http::get(url, Duration::from_secs(5)) {
         Ok(resp) => {
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");
-            let _ = std::fs::write(log_file, format!("GET {url}\nHTTP {}\n\n{head}\n", resp.status));
+            let _ = std::fs::write(
+                log_file,
+                format!("GET {url}\nHTTP {}\n\n{head}\n", resp.status),
+            );
 
             let status_ok = match expect {
                 Some(code) => resp.status == code,
                 None => (200..300).contains(&resp.status), // default: any 2xx
             };
             if !status_ok {
-                let expected = expect.map(|c| c.to_string()).unwrap_or_else(|| "2xx".into());
+                let expected = expect
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "2xx".into());
                 return report(
                     check,
                     log_file,
@@ -382,12 +460,21 @@ fn run_get(url: &str, expect: Option<u16>, contains: &[String], log_file: &Path,
                     Status::Failed,
                     Some(format!("body missing \"{missing}\"")),
                     Some(Cause {
-                        headline: format!("HTTP {} but body doesn't contain \"{missing}\"", resp.status),
+                        headline: format!(
+                            "HTTP {} but body doesn't contain \"{missing}\"",
+                            resp.status
+                        ),
                         correlated: resp.body.lines().take(3).map(String::from).collect(),
                     }),
                 );
             }
-            report(check, log_file, Status::Passed, Some(format!("HTTP {}", resp.status)), None)
+            report(
+                check,
+                log_file,
+                Status::Passed,
+                Some(format!("HTTP {}", resp.status)),
+                None,
+            )
         }
         Err(e) => errored(check, log_file, format!("couldn't reach: {e}")),
     }
@@ -410,10 +497,18 @@ fn run_log(
     let offset = match baseline {
         Some((ino, size)) => {
             if meta.ino() != ino {
-                return errored(check, log_file, "log file was replaced during the run — window is ambiguous".into());
+                return errored(
+                    check,
+                    log_file,
+                    "log file was replaced during the run — window is ambiguous".into(),
+                );
             }
             if meta.size() < size {
-                return errored(check, log_file, "log file was truncated during the run — window is ambiguous".into());
+                return errored(
+                    check,
+                    log_file,
+                    "log file was truncated during the run — window is ambiguous".into(),
+                );
             }
             size
         }
@@ -433,8 +528,14 @@ fn run_log(
     let lines: Vec<&str> = text.lines().collect();
     let _ = std::fs::write(log_file, text.as_bytes()); // evidence: the observed window
 
-    if let Some(idx) = lines.iter().position(|l| absent.iter().any(|p| l.contains(p.as_str()))) {
-        let hit = absent.iter().find(|p| lines[idx].contains(p.as_str())).unwrap();
+    if let Some(idx) = lines
+        .iter()
+        .position(|l| absent.iter().any(|p| l.contains(p.as_str())))
+    {
+        let hit = absent
+            .iter()
+            .find(|p| lines[idx].contains(p.as_str()))
+            .unwrap();
         let lo = idx.saturating_sub(1);
         let hi = (idx + 3).min(lines.len());
         return report(
@@ -444,25 +545,45 @@ fn run_log(
             Some(format!("found \"{hit}\"")),
             Some(Cause {
                 headline: lines[idx].trim().to_string(),
-                correlated: lines[lo..hi].iter().map(|s| s.trim_end().to_string()).collect(),
+                correlated: lines[lo..hi]
+                    .iter()
+                    .map(|s| s.trim_end().to_string())
+                    .collect(),
             }),
         );
     }
-    if let Some(missing) = contains.iter().find(|p| !lines.iter().any(|l| l.contains(p.as_str()))) {
+    if let Some(missing) = contains
+        .iter()
+        .find(|p| !lines.iter().any(|l| l.contains(p.as_str())))
+    {
         return report(
             check,
             log_file,
             Status::Failed,
-            Some(format!("\"{missing}\" not found ({} new line(s))", lines.len())),
+            Some(format!(
+                "\"{missing}\" not found ({} new line(s))",
+                lines.len()
+            )),
             None,
         );
     }
-    report(check, log_file, Status::Passed, Some(format!("{} new line(s) checked", lines.len())), None)
+    report(
+        check,
+        log_file,
+        Status::Passed,
+        Some(format!("{} new line(s) checked", lines.len())),
+        None,
+    )
 }
 
 /// First line matching a forbidden pattern (optionally including the default
 /// crash markers), unless an `allow` pattern exempts it.
-fn scan_lines(lines: &[LogLine], absent: &[String], allow: &[String], with_defaults: bool) -> Option<Cause> {
+fn scan_lines(
+    lines: &[LogLine],
+    absent: &[String],
+    allow: &[String],
+    with_defaults: bool,
+) -> Option<Cause> {
     let hit = |l: &LogLine| {
         let matched = (with_defaults && CRITICAL.iter().any(|m| l.text.contains(m)))
             || absent.iter().any(|p| l.text.contains(p.as_str()));
@@ -482,7 +603,9 @@ fn scan_lines(lines: &[LogLine], absent: &[String], allow: &[String], with_defau
 
 /// First `contains` pattern that appears nowhere in the output.
 fn find_missing<'a>(lines: &[LogLine], contains: &'a [String]) -> Option<&'a String> {
-    contains.iter().find(|p| !lines.iter().any(|l| l.text.contains(p.as_str())))
+    contains
+        .iter()
+        .find(|p| !lines.iter().any(|l| l.text.contains(p.as_str())))
 }
 
 fn summarize(lines: &[LogLine]) -> Option<String> {
@@ -495,7 +618,13 @@ fn summarize(lines: &[LogLine]) -> Option<String> {
     None
 }
 
-fn report(check: &Check, log_file: &Path, status: Status, detail: Option<String>, cause: Option<Cause>) -> CheckReport {
+fn report(
+    check: &Check,
+    log_file: &Path,
+    status: Status,
+    detail: Option<String>,
+    cause: Option<Cause>,
+) -> CheckReport {
     CheckReport {
         label: check.label(),
         status,

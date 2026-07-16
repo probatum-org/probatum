@@ -27,7 +27,9 @@ pub fn get(url: &str, timeout: Duration) -> Result<Response> {
     };
 
     let stream = TcpStream::connect_timeout(
-        &addr.parse().with_context(|| format!("bad address {addr}"))?,
+        &addr
+            .parse()
+            .with_context(|| format!("bad address {addr}"))?,
         timeout,
     )?;
     stream.set_read_timeout(Some(timeout))?;

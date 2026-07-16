@@ -31,7 +31,11 @@ impl CapturedLogs {
 }
 
 /// Attach capture threads to a child's stdout/stderr. Lines go to memory + evidence file.
-pub fn attach(child: &mut Child, evidence_file: PathBuf, started: Instant) -> (CapturedLogs, Vec<JoinHandle<()>>) {
+pub fn attach(
+    child: &mut Child,
+    evidence_file: PathBuf,
+    started: Instant,
+) -> (CapturedLogs, Vec<JoinHandle<()>>) {
     let logs = CapturedLogs::default();
     let file = Arc::new(Mutex::new(
         std::fs::File::create(&evidence_file).expect("create evidence log file"),
@@ -39,10 +43,22 @@ pub fn attach(child: &mut Child, evidence_file: PathBuf, started: Instant) -> (C
     let mut handles = Vec::new();
 
     if let Some(out) = child.stdout.take() {
-        handles.push(spawn_reader(out, "stdout", logs.clone(), file.clone(), started));
+        handles.push(spawn_reader(
+            out,
+            "stdout",
+            logs.clone(),
+            file.clone(),
+            started,
+        ));
     }
     if let Some(err) = child.stderr.take() {
-        handles.push(spawn_reader(err, "stderr", logs.clone(), file.clone(), started));
+        handles.push(spawn_reader(
+            err,
+            "stderr",
+            logs.clone(),
+            file.clone(),
+            started,
+        ));
     }
     (logs, handles)
 }
@@ -62,7 +78,11 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
             if let Ok(mut f) = file.lock() {
                 let _ = writeln!(f, "[{at_ms:>8}ms {source}] {text}");
             }
-            logs.push(LogLine { at_ms, source, text });
+            logs.push(LogLine {
+                at_ms,
+                source,
+                text,
+            });
         }
     })
 }

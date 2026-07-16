@@ -1,0 +1,25 @@
+# CIDX Configuration
+# Auto-detected: Rust project
+#
+# Edit to match your needs. Run 'cidx preset list' for all available tools.
+# Run 'cidx validate' to check, 'cidx run ci' to execute.
+
+# cargo-audit dropped: its preset compiles the tool at runtime (slow, fragile
+# — cidx-side improvement candidate); trivy already scans Cargo.lock for CVEs.
+[security]
+containers = ["trivy", "gitleaks"]
+
+[code]
+containers = ["clippy", "rustfmt"]
+
+[test]
+containers = ["cargo-test", "probatum"]
+
+[build]
+containers = ["cargo-build"]
+
+[pipelines.ci]
+phases = ["security", "code", "test", "build"]
+
+[pipelines.pr]
+phases = ["security", "code", "test"]

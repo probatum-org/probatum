@@ -11,7 +11,12 @@ pub struct Cause {
     pub correlated: Vec<String>,
 }
 
-const PANIC_MARKERS: [&str; 4] = ["panicked at", "FATAL", "Traceback (most recent call last)", "fatal:"];
+const PANIC_MARKERS: [&str; 4] = [
+    "panicked at",
+    "FATAL",
+    "Traceback (most recent call last)",
+    "fatal:",
+];
 const ERROR_MARKERS: [&str; 3] = ["ERROR", "error:", "Error:"];
 
 /// Priority: first panic-class line, else last error-class line, with neighbours.
@@ -34,7 +39,10 @@ pub fn from_logs(lines: &[LogLine]) -> Option<Cause> {
         .map(|l| format!("[{:>6}ms {}] {}", l.at_ms, l.source, l.text.trim_end()))
         .collect();
 
-    Some(Cause { headline, correlated })
+    Some(Cause {
+        headline,
+        correlated,
+    })
 }
 
 /// Tail of raw output for suites (last meaningful lines).

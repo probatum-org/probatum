@@ -51,7 +51,10 @@ pub fn print(r: &RunReport) {
     println!();
     match r.verdict.as_str() {
         "pass" => {
-            println!("{GREEN}{BOLD}✓ all passed{RESET} {DIM}({} checks){RESET}", r.checks.len());
+            println!(
+                "{GREEN}{BOLD}✓ all passed{RESET} {DIM}({} checks){RESET}",
+                r.checks.len()
+            );
         }
         "couldn't-run" => {
             println!(

@@ -1,0 +1,11 @@
+# Project override: the stock probatum preset runs ./probatum.yaml, which in
+# THIS repo needs the host toolchain (cargo, python3) — that suite runs
+# natively in .github/workflows/ci.yml. In-container we run the image
+# selfcheck instead: it proves the shipped image can run checks at all.
+[presets.probatum]
+name = "probatum"
+phase = "test"
+image = "ghcr.io/probatum-org/probatum:0.1.0"
+command = "run .probatum/selfcheck.yaml"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]

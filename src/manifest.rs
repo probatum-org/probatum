@@ -100,7 +100,13 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 absent,
             });
         } else if map.get("run").is_some() {
-            reject_unknown(map, n, &["run", "ready", "timeout", "contains", "absent", "allow", "name"])?;
+            reject_unknown(
+                map,
+                n,
+                &[
+                    "run", "ready", "timeout", "contains", "absent", "allow", "name",
+                ],
+            )?;
             let cmd = req_str(map, "run", n)?;
             let name = opt_str(map, "name");
             let contains = str_list(map, "contains");
@@ -120,7 +126,12 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 if !allow.is_empty() {
                     bail!("check {n}: 'allow' only applies to a service (add ready:/timeout:) — a plain run has no default filter to exempt");
                 }
-                checks.push(Check::Run { cmd, name, contains, absent });
+                checks.push(Check::Run {
+                    cmd,
+                    name,
+                    contains,
+                    absent,
+                });
             }
         } else {
             bail!("check {n} needs a 'run', 'get' or 'log' key");
@@ -148,9 +159,10 @@ fn opt_u64(map: &Mapping, key: &str) -> Option<u64> {
 fn str_list(map: &Mapping, key: &str) -> Vec<String> {
     match map.get(key) {
         Some(Value::String(s)) => vec![s.clone()],
-        Some(Value::Sequence(seq)) => {
-            seq.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-        }
+        Some(Value::Sequence(seq)) => seq
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         _ => Vec::new(),
     }
 }
