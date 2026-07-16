@@ -959,7 +959,14 @@ largely carries over as noted in the pivot section.
   work): the cargo-audit preset compiles the tool from source at runtime
   (slow, fragile — failed here; dropped from probatum's security phase since
   trivy already scans Cargo.lock); local `cidx` pull of dhi.io images asked
-  for auth while a plain `docker pull` succeeded anonymously.
+  for auth while a plain `docker pull` succeeded anonymously; **preset drift
+  between released cidx and main** — the CI bootstrap installs cidx@latest,
+  whose rustfmt preset lacks the `rustup component add` that main has, so
+  CIDX CI failed on GitHub while passing locally. Worked around with a
+  project-level rustfmt override in `.cidx/presets.toml`.
+- Final state: both workflows green on GitHub — `ci` (native dogfooding,
+  1m06) and `CIDX CI` (containerized pipeline incl. probatum-in-container,
+  1m48). The loop is closed and verified both locally and in CI.
 
 ### 2026-07-14 — Post-pivot semantic cleanup
 
