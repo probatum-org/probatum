@@ -12,6 +12,22 @@ probatum run --json                 # machine verdict (agents, CI)
 cat some.yaml | probatum run -      # config from stdin — no temp file
 ```
 
+One file in, one verdict out:
+
+```mermaid
+flowchart LR
+    Y["probatum.yaml<br/>flat checks, no logic"] --> P(["probatum run"])
+    P --> R["run:<br/>a command"]
+    P --> G["get:<br/>an HTTP endpoint"]
+    P --> L["log:<br/>an external log file"]
+    R --> V{"verdict"}
+    G --> V
+    L --> V
+    V -- all passed --> OK["✓ exit 0"]
+    V -- a check failed --> KO["✗ exit 1<br/>cause on screen"]
+    V -- could not observe --> NR["⚠ exit 2<br/>couldn't run"]
+```
+
 Convention: `probatum.yaml` at the repo root is the default config;
 `.probatum/` holds secondary check files (committed) and `.probatum/runs/`
 the evidence of each run (ignored).
@@ -53,6 +69,26 @@ Sources: `run:` (command), `run:` + `ready:`/`timeout:` (service), `get:`
 (must appear), `absent` (must not appear), `allow` (exempt lines from the
 service crash filter), `name` (display label). Unknown keys are rejected —
 a typo must never silently skip a check.
+
+What a run looks like — probatum owns everything it starts:
+
+```mermaid
+sequenceDiagram
+    participant probatum
+    participant app as your app
+    participant log as app.log
+
+    probatum->>app: start, in its own process group
+    loop until ready, or timeout = failed
+        probatum->>app: GET /healthz
+    end
+    app-->>probatum: 200, ready
+    probatum->>app: GET /api/version, expect 200
+    app-->>probatum: 200
+    probatum->>log: read new lines only (written during this run)
+    probatum->>app: SIGKILL the whole tree, even on crash or Ctrl-C
+    Note over probatum: verdict + evidence in .probatum/runs/NNNN/
+```
 
 ## The contract
 
