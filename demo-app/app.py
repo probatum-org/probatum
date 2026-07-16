@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 #   WAL_DIR=/nonexistent  -> crash at boot (missing segment)
 #   DEGRADE=1             -> become ready, then log an ERROR (degrades after readiness)
 #   LOG_FILE=path         -> also append log lines to an external file (log: checks)
+#   HANG=1                -> boot fine but never open the port (readiness timeout)
 WAL_DIR = os.environ.get("WAL_DIR") or os.path.join(os.path.dirname(__file__), "data", "wal")
 SEGMENTS = ["0001", "0002", "0003", "0004"]
 
@@ -69,6 +70,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     STATE = replay_wal()
     time.sleep(0.2)
+    if os.environ.get("HANG"):
+        log("INFO", "HANG=1: boot done but never opening the port")
+        time.sleep(3600)
     log("INFO", "listening on 127.0.0.1:8087")
     if os.environ.get("DEGRADE"):
         import threading

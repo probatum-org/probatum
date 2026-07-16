@@ -13,3 +13,17 @@
   run: "./target/debug/probatum run .probatum/broken-check.yaml; test $? -eq 1"
 - name: post-ready degradation is caught
   run: "./target/debug/probatum run .probatum/degraded-check.yaml; test $? -eq 1"
+- name: never-ready service is caught (timeout = failure)
+  run: "./target/debug/probatum run .probatum/hang-check.yaml; test $? -eq 1"
+
+# couldn't-run family: these MUST be exit 2 — refusing is not failing
+- name: config typo is refused
+  run: "./target/debug/probatum run .probatum/invalid-key.yaml; test $? -eq 2"
+- name: missing log file is couldn't-run, not failed
+  run: "./target/debug/probatum run .probatum/missing-log-check.yaml; test $? -eq 2"
+- name: dirty environment is refused
+  run: "python3 demo-app/app.py >/dev/null 2>&1 & P=$!; sleep 1; ./target/debug/probatum run .probatum/degraded-check.yaml >/dev/null 2>&1; c=$?; kill $P; test $c -eq 2"
+
+# ownership: probatum crashing mid-run (exit 101) must still free the port
+- name: ownership survives probatum's own crash
+  run: "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/degraded-check.yaml >/dev/null 2>&1; test $? -eq 101 && python3 demo-app/tests/portfree.py"

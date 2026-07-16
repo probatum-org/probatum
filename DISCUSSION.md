@@ -884,6 +884,23 @@ largely carries over as noted in the pivot section.
 - The cidx preset itself remains cidx-side work (mounting the workspace,
   network to reach services under test).
 
+### 2026-07-15 — Dogfooding completeness pass
+
+- Honest inventory: the suite covered the green path and two caught failures,
+  but asserted none of the exit-2 guardrails — while failed ≠ couldn't-run is
+  frozen product identity. Five checks added (10 total now):
+  - never-ready service times out → exit 1 (locks the historic timeout-orphan
+    path's semantics);
+  - config typo refused → exit 2; missing log file → exit 2 (couldn't-run,
+    not failed); dirty environment (intruder already on the port) → exit 2;
+  - **ownership survives probatum's own crash**: PROBATUM_TEST_PANIC run must
+    exit 101 AND leave the port free (`demo-app/tests/portfree.py`).
+- New mock switch: `HANG=1` (boots fine, never opens the port). The mock now
+  plays five stories: green, boot-crash, degrade-after-ready, external log,
+  never-ready.
+- `.probatum/invalid-key.yaml` is committed *intentionally invalid* — it
+  exists to be refused.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

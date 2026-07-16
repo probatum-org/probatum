@@ -1,0 +1,6 @@
+# Negative scenario: the app boots but never opens the port — "not ready in
+# time" must be a failure. Used inverted by the root probatum.yaml (expects exit 1).
+- name: app boots but never becomes ready
+  run: HANG=1 python3 demo-app/app.py
+  ready: http://127.0.0.1:8087/healthz
+  timeout: 3

@@ -1,0 +1,4 @@
+# Intentionally invalid: 'redy' is a typo. probatum must refuse the whole
+# config (exit 2) — a typo must never silently skip a check.
+- run: python3 demo-app/app.py
+  redy: http://127.0.0.1:8087/healthz

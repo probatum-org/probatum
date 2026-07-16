@@ -18,7 +18,9 @@ are *caught* (exit 1 exactly).
 - Fixed a bug or added behavior? **Add a check that would have caught it** to
   `probatum.yaml` or `.probatum/*.yaml` — not an ad-hoc test script. Negative
   scenarios live as env switches on `demo-app/app.py` (`WAL_DIR`, `DEGRADE`,
-  `LOG_FILE`) + an inverted check (`...; test $? -eq 1`).
+  `LOG_FILE`, `HANG`) + an inverted check (`...; test $? -eq 1` for caught
+  failures, `-eq 2` for couldn't-run refusals, `-eq 101` + port probe for
+  probatum's own crash).
 - A dogfooding run that goes red is a finding, not an annoyance — it already
   caught one real doc/code gap (missing ERROR markers in the service filter).
 
