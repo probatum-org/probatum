@@ -1,0 +1,19 @@
+name: ci
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  dogfood:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - run: cargo fetch
+      - run: cargo build --offline
+      # probatum checks probatum: build, clippy, --help surface, demo
+      # end-to-end, and every negative scenario (exit 1/2/101 semantics).
+      - name: probatum run
+        run: ./target/debug/probatum run

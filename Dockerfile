@@ -13,3 +13,7 @@ COPY target/x86_64-unknown-linux-musl/release/probatum /usr/local/bin/probatum
 WORKDIR /work
 ENTRYPOINT ["probatum"]
 CMD ["run"]
+
+LABEL org.opencontainers.image.source="https://github.com/probatum-org/probatum"
+LABEL org.opencontainers.image.description="Test-oriented check runner: one config, embedded checks, only the failures that matter."
+LABEL org.opencontainers.image.licenses="MIT"
