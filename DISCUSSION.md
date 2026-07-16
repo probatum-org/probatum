@@ -919,6 +919,25 @@ largely carries over as noted in the pivot section.
 - Dogfooded: a check asserts --help stays complete (`contains` on the key
   surface terms). Suite is now 11 checks.
 
+### 2026-07-16 — Published, packaged, integrated into cidx
+
+- Repo pushed to github.com/probatum-org/probatum (public, MIT — aligned with
+  cidx).
+- Registry decision: **GHCR, not Docker Hub** — matches cidx's own pattern
+  (ghcr.io/cidx-org/cidx), zero secrets (GITHUB_TOKEN), org already exists.
+  Container lives in the same repo (Dockerfile is version-locked to the
+  source), not a separate one.
+- CI: `probatum run` (the full 11-check dogfooding suite) on every push/PR.
+  Release: on `v*` tags, musl build + ghcr.io/probatum-org/probatum
+  {version,latest}. v0.1.0 tagged; both workflows green in ~40 s.
+- cidx integration: `[presets.probatum]` (phase = "test", image = the GHCR
+  0.1.0, command = "run") + docs/reference/tools.md entry — PR cidx-org/cidx#160,
+  CI green, marked ready. No `config` option: `probatum run` defaults to
+  probatum.yaml, and an unverified flag mapping would have been a guess.
+- Remaining manual step: GHCR container packages born from Actions are
+  private and visibility is UI-only — flip to Public in the package settings,
+  otherwise the preset's pull fails anonymously.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one
