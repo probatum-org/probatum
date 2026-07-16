@@ -1,0 +1,3 @@
+# Whitelist: the build context only needs the static binary.
+*
+!target/x86_64-unknown-linux-musl/release/probatum

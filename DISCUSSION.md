@@ -869,6 +869,21 @@ largely carries over as noted in the pivot section.
   them. Inner loop = `probatum run` direct; outer loop = `cidx run test` via
   preset; both read the same `probatum.yaml` (one source of truth).
 
+### 2026-07-15 — Packaging: static musl binary + container image
+
+- Network was available; the packaging item landed the same day:
+  `x86_64-unknown-linux-musl` target added, static binary builds offline from
+  cached crates (977 KB, `statically linked`, stripped) and passes the full
+  dogfooding suite as the outer runner.
+- `Dockerfile`: alpine 3.20 + the binary (13.6 MB image), `ENTRYPOINT
+  probatum`, `CMD run`. **alpine, not scratch, deliberately**: `run:` checks
+  spawn `sh -c`, so the image needs a shell; busybox provides it. Project
+  toolchains are explicitly NOT shipped — they belong to the pipeline's own
+  images. `.dockerignore` whitelists only the binary (tiny build context).
+- Verified: config piped from stdin runs green inside the container.
+- The cidx preset itself remains cidx-side work (mounting the workspace,
+  network to reach services under test).
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

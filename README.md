@@ -108,6 +108,19 @@ aggregation, no plugin system, no CI orchestration. The day the config needs
 an `if`, the design has failed. Build/deploy stay in your Makefile; probatum
 takes the verification.
 
+## Packaging
+
+```bash
+cargo build --release --target x86_64-unknown-linux-musl   # static binary, ~1 MB, runs on any Linux
+docker build -t probatum .                                  # alpine + binary, ~14 MB
+cat some.yaml | docker run -i --rm probatum run -           # containerized run
+```
+
+The image ships probatum and a busybox shell only — project toolchains
+(cargo, python…) belong to the pipeline's own images. Intended as the base for
+a [cidx](https://github.com/cidx-org/cidx) preset: `cidx run test` includes
+probatum; the inner dev/agent loop keeps calling `probatum run` natively.
+
 ## Next
 
 New rules/sources only against real, recurring needs (e.g. `expect: [200, 204]`).
