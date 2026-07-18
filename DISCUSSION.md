@@ -968,6 +968,20 @@ largely carries over as noted in the pivot section.
   1m06) and `CIDX CI` (containerized pipeline incl. probatum-in-container,
   1m48). The loop is closed and verified both locally and in CI.
 
+### 2026-07-16 — cidx issues filed; SIGINT lock closes the last known gap
+
+- The three cidx findings are now issues, owner will handle them:
+  cidx-org/cidx#161 (cargo-audit runtime compilation), #162 (dhi.io pull vs
+  anonymous docker pull), #163 (released-vs-main preset drift + version
+  pinning in generated workflows).
+- Last known dogfooding gap closed: **ownership survives Ctrl-C** — an outer
+  check backgrounds a probatum run (`.probatum/sigint-check.yaml`: demo
+  service holding the port + long sleep), sends SIGINT, asserts exit 130 AND
+  the port freed. Suite is now 12 checks, all green.
+- Every exit path of the ownership guarantee is now locked by a check:
+  normal end (implicit via sequential port reuse), panic (101), SIGINT (130).
+  Only SIGKILL of probatum itself remains uncoverable — physics, recorded.
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one

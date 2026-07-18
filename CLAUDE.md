@@ -20,7 +20,7 @@ are *caught* (exit 1 exactly).
   scenarios live as env switches on `demo-app/app.py` (`WAL_DIR`, `DEGRADE`,
   `LOG_FILE`, `HANG`) + an inverted check (`...; test $? -eq 1` for caught
   failures, `-eq 2` for couldn't-run refusals, `-eq 101` + port probe for
-  probatum's own crash).
+  probatum's own crash, `-eq 130` + port probe for Ctrl-C/SIGINT).
 - A dogfooding run that goes red is a finding, not an annoyance — it already
   caught one real doc/code gap (missing ERROR markers in the service filter).
 

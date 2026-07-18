@@ -32,3 +32,7 @@
 # ownership: probatum crashing mid-run (exit 101) must still free the port
 - name: ownership survives probatum's own crash
   run: "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/degraded-check.yaml >/dev/null 2>&1; test $? -eq 101 && python3 demo-app/tests/portfree.py"
+
+# ownership: Ctrl-C (SIGINT) mid-run (exit 130) must still free the port
+- name: ownership survives Ctrl-C
+  run: "./target/debug/probatum run .probatum/sigint-check.yaml >/dev/null 2>&1 & P=$!; sleep 2; kill -INT $P; wait $P; test $? -eq 130 && python3 demo-app/tests/portfree.py"

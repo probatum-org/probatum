@@ -1,0 +1,8 @@
+# Used by the Ctrl-C ownership check in probatum.yaml: boots the demo service
+# (which holds port 8087), then blocks on a long sleep — the outer check
+# interrupts probatum right here and asserts the port was freed.
+- name: app boots
+  run: python3 demo-app/app.py
+  ready: http://127.0.0.1:8087/healthz
+  timeout: 10
+- run: sleep 30
