@@ -12,3 +12,14 @@ volumes = ["${WORKSPACE}:/work"]
 # (rustfmt override removed: fixed upstream in cidx 2.1.0 — cidx-org/cidx#163;
 # the CI bootstrap is pinned to the 2.1.0 commit until cidx-org/cidx#187 makes
 # v2 tags reachable by `go install`.)
+
+# cargo-audit override: the 2.1.0 preset extracts to /usr/local/bin, which
+# fails when the container runs non-root (CI) — cidx-org/cidx follow-up issue.
+# Extract to /tmp and keep cargo's writable dirs there too.
+[presets.cargo-audit]
+name = "cargo-audit"
+phase = "security"
+image = "rust:1.95.0"
+command = "sh -c 'curl -sSfL https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.22.2/cargo-audit-$(uname -m)-unknown-linux-gnu-v0.22.2.tgz | tar xz --strip-components=1 -C /tmp && HOME=/tmp CARGO_HOME=/tmp/cargo PATH=/tmp:$PATH cargo audit'"
+workdir = "/work"
+volumes = ["${WORKSPACE}:/work"]
