@@ -982,6 +982,54 @@ largely carries over as noted in the pivot section.
   normal end (implicit via sequential port reuse), panic (101), SIGINT (130).
   Only SIGKILL of probatum itself remains uncoverable — physics, recorded.
 
+### 2026-07-19 — cidx 2.1.0 tested; two new upstream findings
+
+- cidx 2.1.0 fixes #161/#162/#163 as filed (cargo-audit downloads the release
+  binary; rustfmt has its component add; `generate` now warns about
+  local-vs-CI preset parity). probatum updated: rustfmt override removed,
+  cargo-audit back in [security], workflow regenerated.
+- **New root cause found behind the drift (#187)**: cidx's go.mod lacks the
+  `/v2` module-path suffix, so `go install …@v2.1.0` is impossible and
+  `@latest` resolves to **v1.8.0** — every generated workflow bootstraps a
+  major behind. Workaround: probatum's CI bootstrap is pinned to the v2.1.0
+  commit (`@a02b85b`) until fixed.
+- **cargo-audit follow-up (#188)**: the 2.1.0 preset extracts to
+  /usr/local/bin — Permission denied in CI where the container runs
+  non-root (root masks it locally). Workaround: project override extracting
+  to /tmp with writable HOME/CARGO_HOME.
+- Both probatum workflows green with all of the above. #162 (dhi.io pull)
+  verified in CI; local re-test pending (Docker Desktop was down).
+
+## Feature proposals (2026-07-19)
+
+Formalized at the owner's request. Every candidate is judged against the
+admission test — *one operation, one observable result, flat pass/fail
+rules* — and ordered by how real the need already is. `probatum init` stays
+as-is (owner-approved).
+
+1. **`timeout:` on plain `run:`** — the one real gap: a hung command (test
+   deadlock, stuck migration) blocks a run forever; services have a deadline,
+   commands don't. Semantics: exceeding the declared budget = **failed**
+   (consistent with a service's not-ready-in-time). Passes the admission test
+   cleanly; smallest diff; highest safety value. *Recommended first.*
+2. **Structured multi-failure `--json` (schema 2)** — the deferred pivot
+   debt: a suite with 12 red tests currently collapses to one cause; the
+   machine contract should carry per-check failure lists so an agent can act
+   on all of them. Human output stays collapsed.
+3. **`expect: [200, 204]`** — list-valued status on one rule; still flat, not
+   a language. Parked until an actual endpoint needs it.
+4. **`${VAR}` interpolation** — same config across dev/staging URLs. Strictly
+   value substitution: no defaults, no conditionals — the day it grows an
+   `${X:-fallback}` it is a language. Parked until a real repo hurts.
+5. **MCP server (`probatum.run` as a tool)** — the agent endgame: no shell,
+   no parsing, structured verdict in-protocol. Worth doing after real agent
+   usage of `--json` shows what the tool schema should be.
+
+Watchlist (not proposed): `post:` (mutating HTTP — wait for a need that
+`get:` + `run: curl` can't serve), Windows support (owner is WSL-native),
+parallel checks (sequential is a v1 design decision, revisit only with a
+proof-driven need).
+
 ### 2026-07-14 — Post-pivot semantic cleanup
 
 - Confirmed that the pivot is a genuine product improvement: the value is one
