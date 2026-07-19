@@ -9,14 +9,6 @@ image = "ghcr.io/probatum-org/probatum:0.1.0"
 command = "run .probatum/selfcheck.yaml"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
-
-# rustfmt override: the released cidx preset runs `cargo fmt` without adding
-# the rustup component first, which fails on rust image variants where
-# cargo-fmt is a rustup proxy. Add the component explicitly (idempotent).
-[presets.rustfmt]
-name = "rustfmt"
-phase = "code"
-image = "rust:1.95.0"
-command = "sh -c 'rustup component add rustfmt >/dev/null 2>&1; cargo fmt -- --check'"
-workdir = "/work"
-volumes = ["${WORKSPACE}:/work"]
+# (rustfmt override removed: fixed upstream in cidx 2.1.0 — cidx-org/cidx#163;
+# the CI bootstrap is pinned to the 2.1.0 commit until cidx-org/cidx#187 makes
+# v2 tags reachable by `go install`.)

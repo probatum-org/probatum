@@ -26,7 +26,8 @@ jobs:
       - name: Install CIDX
         run: |
           mkdir -p bin
-          go install github.com/cidx-org/cidx/cmd/cidx@latest
+          # pinned to the v2.1.0 commit: @latest resolves to v1.8.0 until cidx-org/cidx#187 (/v2 module path) is fixed
+          go install github.com/cidx-org/cidx/cmd/cidx@a02b85b
           cp "$(go env GOPATH)/bin/cidx" bin/cidx
       - uses: actions/upload-artifact@v7
         with:

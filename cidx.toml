@@ -4,10 +4,10 @@
 # Edit to match your needs. Run 'cidx preset list' for all available tools.
 # Run 'cidx validate' to check, 'cidx run ci' to execute.
 
-# cargo-audit dropped: its preset compiles the tool at runtime (slow, fragile
-# — cidx-side improvement candidate); trivy already scans Cargo.lock for CVEs.
+# cargo-audit back since cidx 2.1.0: the preset now downloads the prebuilt
+# release binary (cidx-org/cidx#161).
 [security]
-containers = ["trivy", "gitleaks"]
+containers = ["trivy", "gitleaks", "cargo-audit"]
 
 [code]
 containers = ["clippy", "rustfmt"]
