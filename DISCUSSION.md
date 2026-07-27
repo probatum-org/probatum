@@ -1,1050 +1,333 @@
 # Discussion — probatum
 
-This document preserves the context of discussions around `probatum` so that
-future conversations can resume without starting from scratch.
-
-It deliberately separates:
-
-- principles the project has already asserted;
-- observations and proposals still under discussion;
-- decisions actually made.
-
-## Context
-
-`probatum` is currently a v0. It executes a proof manifest made of a promise,
-steps and oracles, then produces a human or machine verdict along with an
-evidence directory that lets you examine and replay the run.
-
-The central proposition is:
-
-> Don't trust the promise. Run the proof.
-
-The project aims to verify the real behavior of a system, beyond isolated tests
-or claims made about it.
-
-### Intended use (clarified 2026-07-14)
-
-probatum is the single, clean-output executor for **static and/or dynamic checks
-— including LLM-generated ones**. The goal is twofold:
-
-- an LLM agent stops chaining ad-hoc shell commands and drowning in their output;
-  it runs one manifest and reads one verdict (`--json`);
-- the human stops writing Makefiles, Taskfiles and command-stuffed scripts; the
-  manifest *is* the declarative "what to prove".
-
-This answers the "first user" open question: the first reader is the agent (and
-the human looking over its shoulder). Two consequences follow:
-
-- because the manifest may be machine-generated, strict validation is not
-  cosmetic — a silently ignored field means the agent believes it tested
-  something it did not;
-- because the agent consumes `--json`, `run.json` is a public contract and must
-  be versioned as one.
-
-The differentiator versus "just run bash" is exactly the three principles below:
-ownership/teardown (an agent looping 50 runs never piles up orphan servers), the
-collapsed verdict (the agent doesn't parse logs), and evidence/replay.
-
-### Pivot (2026-07-14): from proof engine to test-oriented runner
-
-The proof framing (promise, oracles, evidence registry) was the assistant's
-baggage, not the owner's need. The owner's actual requirement:
-
-> One line, one config file: run my checks, and surface only the errors and
-> info that matter.
-
-The identity is therefore: **like a Makefile or Taskfile, but test-oriented,
-with embedded features**. The curl is embedded, the grep is embedded, the
-process supervision is embedded; the user only declares the rules that make a
-check pass or fail.
-
-The model: a check = **source × flat rules**.
-
-- Sources: `run:` (a command), `get:` (an HTTP endpoint — embedded client),
-  `log:` (an external log file — embedded matching, no shell-out to grep).
-- Rules: exit 0 (implicit for `run`), `expect:` (HTTP status), `contains:`
-  (must appear), `absent:` (must not appear), plus `ready:`/`timeout:` to
-  start a service and keep it alive for later checks.
-- Rules are a flat AND list. No general OR, no nesting, no logic. Two checks are
-  also an AND and therefore do not emulate OR; common list-valued alternatives
-  may be considered later. This protects the compass: a human or an LLM writes
-  the file correctly on the first try, without reading documentation.
-
-Design points settled during the discussion:
-
-- **The noise filter is ~90% of the value.** Zero-config defaults (panic,
-  traceback, FATAL, last ERROR) must work out of the box; `fail_on`/`allow`
-  are app-specific exceptions, not the norm. If everything must be configured,
-  the tool is a worse Makefile.
-- **The filter must be humble.** Strong collapse when the signal is sure
-  (panic, clean traceback); when unsure (exit 1 with no recognized marker),
-  show the tail and say "exit 1" — never invent a cause. A false cause is
-  worse than no cause.
-- **Features, not plugins.** A small curated set of built-in verbs; no
-  extension mechanism, no registry, no remote imports. A verb earns its place
-  only if it asserts over something the tool already owns or embeds (process
-  tree, captured output, HTTP response, log window).
-- **Two log intentions, two rules.** `absent` (errors must not appear) and
-  `contains` (positive confirmation must appear) are distinct declarations. An
-  empty or missing log with `absent` is "couldn't run", not a silent pass.
-- **Prefer the strongest signal.** HTTP 200 beats grepping "Listening on
-  8080"; log matching is for what has no better signal.
-- **External log files are in scope** — evaluated **from run start**: the file
-  offset is noted at start and only new lines count. A target log that already
-  exists before the run is normal; its identity and size establish the initial
-  observation boundary. Unexpected replacement, truncation or rotation during
-  the window makes the check ambiguous and therefore `couldn't-run`.
-- **Detection over destruction.** probatum detects a dirty environment
-  (pre-existing log, occupied port, already-running instance) and reports
-  "couldn't run: environment not clean". It never purges what it does not own —
-  purging is the user's own first `- run:` check (setup is just a check).
-  Cheap sandbox for now (clean start + detection + declared setup); real OS
-  isolation is a separate, later decision.
-- **No template layer.** "Template" meant an example config to copy. A good
-  example (possibly shipped by `probatum init`) is enough; parameterized
-  reusable checks are reconsidered only if duplication starts hurting.
-- **Sequential, top to bottom.** A log check comes after the traffic that
-  produces its lines. No implicit parallelism in v1.
-
-### Post-pivot refinements
-
-The simplification is substantive rather than cosmetic: the former model had
-conceptual depth, while the new model gives a user an immediate reason to run
-the tool. A few semantics still need tightening before the config contract is
-frozen.
-
-#### OR is not two checks
-
-The earlier statement "need an OR -> write two checks" is incorrect: two
-top-level checks form part of the global sequential AND, so both must pass. Two
-HTTP checks cannot express "200 or 204" against one response.
-
-The accepted v1 direction is to keep general boolean logic out of the config.
-Whether selected rules later accept a small list such as `expect: [200, 204]`
-remains open; until then, unsupported OR semantics must be stated honestly
-rather than approximated with two checks.
-
-#### Existing log file is not automatically dirty
-
-The run-start offset exists precisely so a long-lived log file can be observed
-without deleting its history. Mere pre-existence is therefore not sufficient to
-classify the environment as dirty.
-
-At run start, probatum can record the file identity and size, then evaluate only
-new bytes. Actual ambiguity includes replacement, unexpected truncation or
-rotation during the observation window. A pre-existing service or occupied port
-is dirty when it conflicts with a service probatum intends to start; an existing
-log file by itself is normal.
-
-#### Defaults are part of each source contract
-
-Zero-config behavior must be defined per source, not left as filter folklore.
-The remaining questions include:
-
-- `run`: non-zero exit is a failure; do recognized fatal markers also fail a
-  command that exits zero?
-- `get`: does omitted `expect` mean exactly 200, any 2xx, or no status rule?
-- `log`: must at least one of `contains` or `absent` be declared?
-- missing expected content after valid observation is `failed`; unreadable or
-  ambiguously rotated input is `couldn't-run`.
-
-Good defaults should remove repetitive configuration without making invisible
-assertions surprising.
-
-**Answered 2026-07-14 (contract frozen, implemented):**
-
-- `run`: exit code is the authority. Default crash markers do NOT fail an
-  exit-0 command (a passing `cargo test` legitimately prints "panicked at" for
-  `should_panic` tests). Explicitly declared `contains`/`absent` apply to the
-  output even on exit 0.
-- Service (`ready:`/`timeout:`): default crash markers ON — there is no exit
-  code to trust while it runs; `allow` exempts known noise.
-- `get`: omitted `expect` = any 2xx (owner's choice). `contains` applies to
-  the body.
-- `log`: at least one rule required, otherwise config error (owner's choice —
-  zero invisible assertions). Missing file, replacement or truncation during
-  the window → couldn't-run. **Deviation to confirm**: an empty window with
-  `absent`-only rules passes with an explicit "(0 new line(s) checked)" detail
-  rather than couldn't-run — watching an error log that stays empty is the
-  success case, and the count keeps the pass from being silent.
-- Vocabulary unification: `fail_on` folded into `absent` — the same rule words
-  on every source; `allow` is reserved for the service crash filter.
-- Sequential stop at first failed/errored check; the rest is reported skipped.
-- Run verdict: `pass | fail | couldn't-run` (failed wins over errored); exit
-  codes 0/1/2.
-
-#### A check may perform an operation
-
-"Setup is just a check" is intentionally pragmatic, but a setup command mutates
-the environment rather than making a pure assertion. The honest general model
-is:
-
-> A check performs one operation and applies pass/fail rules to its observable
-> result.
-
-This definition covers setup commands, service starts, HTTP requests and log
-inspection without pretending every config entry is a pure assertion.
-
-#### Product language must follow the pivot
-
-`Don't trust the promise. Run the proof.` remains strong project DNA, but it no
-longer describes the config surface or primary product category. The main pitch
-should become direct and check-oriented; candidates raised during discussion
-include:
-
-> Run the checks. See what matters.
-
-and:
-
-> One config. Clean checks. Useful failures.
-
-No replacement tagline is decided yet.
-
-What carries over from the proof-engine phase, in plainer words:
-
-- ownership/teardown (the RAII core) → "the service you started gets killed,
-  no zombie port between runs";
-- violated vs inconclusive → **failed vs couldn't-run** — same invariant, same
-  value (a false "failed" makes you chase ghosts), simpler words;
-- strict validation (unknown key = error) — a generated config must not
-  silently claim a check that never ran;
-- `--json` with a versioned schema for agents;
-- continuous timestamped capture as the substrate for log rules.
-
-Dropped or shelved: the promise/oracle ceremony (`proof:`, `promise:`),
-seed-driven mutations (`matrix:`), the per-release evidence registry, and
-perturbations as the core identity. Any of these may return later as features;
-none of them is the identity anymore.
-
-State note: the committed code (`d4712f2`) still implements the pre-pivot
-design; an uncommitted working-tree rewrite implements most of the new one
-(see journal).
-
-### Boundary with cidx (2026-07-15)
-
-The owner also maintains [cidx](https://github.com/cidx-org/cidx), a
-declarative CI/CD runner: `cidx.toml` declares *tools* to run against the
-source (trivy, gitleaks, golangci-lint, go-test…), containerized via presets,
-grouped in phases and pipelines, with GitHub/GitLab workflow generation.
-
-Not a duplicate — the two verify different objects:
-
-- **cidx**: the *code*, statically — which scanners/linters/test tools run,
-  identically local and CI.
-- **probatum**: the *running system*, dynamically — boot, readiness, HTTP
-  behavior, log window, teardown. cidx has none of that machinery.
-
-The honest overlap: both can run an arbitrary command, so a custom cidx stage
-*could* script its way to the same checks. probatum's value inside that
-overlap is concentration: embedded primitives, process ownership, the noise
-filter, failed ≠ couldn't-run, and the agent-readable verdict — one powerful,
-expressive check runner instead of a pile of stage scripts.
-
-Sharing rule: *run a tool against my sources* → cidx stage; *start my system
-and observe its behavior* → probatum.
-
-**Owner's decision**: probatum maps to the **test phase of the DevOps loop** —
-in cidx terms it belongs to `cidx run test` (e.g. `[test] containers =
-["go-test", "probatum"]`), not to a separate phase. Do not re-declare
-lint/scan/unit-test stages inside `probatum.yaml` in repos that have cidx
-(the probatum repo's own build+clippy checks are the dogfooding exception).
-
-Guardrails both ways: if probatum ever wants phases/pipelines/presets it is
-becoming cidx — refuse; if cidx ever wants readiness/process ownership it is
-becoming probatum — same.
-
-Integration work item (packaging, not design): a static musl binary or a
-small image so probatum fits cidx's containerized presets.
-
-**Decided (2026-07-15): separate tools, linked by a preset — no merge.**
-cidx never absorbs its tools (trivy, gitleaks, go-test are all external
-binaries it orchestrates); probatum joins that roster like any other. cidx
-launches everything *too*, not *exclusively*: the inner loop (a dev or an
-agent, in seconds) calls `probatum run` directly; the outer loop (pipeline,
-CI) reaches it through `cidx run test`. Both paths read the same
-`probatum.yaml` — two launchers, one source of truth. Reinforcing reasons:
-containerized cidx vs native process ownership, Go vs Rust and different
-release rhythms, and probatum's non-cidx uses (MCP/agents, repos without
-cidx).
-
-## Current project principles
-
-*Historical pre-pivot wording. The ownership, deterministic diagnosis and dual
-human/machine output principles survive; promise/evidence/seed language does
-not define the current product surface.*
-
-These principles are already presented as non-negotiable in the README:
-
-- the runner owns and tears down everything it launches;
-- stdout and stderr are captured continuously;
-- diagnosis and verdict stay deterministic, without AI;
-- every run produces evidence and a replay seed;
-- the output serves two readers: the human and the machine.
-
-## First look at v0
-
-### Perceived strengths
-
-- The proposition is easy to state: promise, real execution, evidence, verdict.
-- The manifest is immediately understandable.
-- Evidence is central to the model rather than bolted on after execution.
-- The separation between a mechanical verdict and its possible downstream use by
-  an AI is sound.
-- Terminal output and JSON output serve two complementary uses.
-- The demo shows a relevant case: tests pass, but the real boot fails.
-- The small scope and low dependency count suit a v0 aimed at CI and agents.
-
-### Positioning stake
-
-At this stage `probatum` could be superficially perceived as a YAML runner of
-commands and HTTP checks. Its singularity should become far sharper with
-perturbations, snapshots/diffs and replayable mutations.
-
-The LLM-agent framing above sharpens it further: the value is not the number of
-drivers but the quality, completeness and replayability of the proof, plus the
-ownership guarantee that makes it safe to run in a tight agent loop.
-
-One positioning boundary is now explicit: probatum is not intended to replace
-general task automation. A Makefile or Taskfile can describe how to build an
-artifact and manage dependencies; probatum describes what must be established
-as true. It may replace ad-hoc verification scripts, even when both happen to
-run similar commands.
-
-> A task says "do X". A proof says "establish that P is true".
-
-This boundary is about the contract, not the mechanics: probatum rejects the
-"do X" contract, not every mechanism a task runner happens to share. Some of
-those mechanisms are proof-relevant — notably parallelism (starting three
-services concurrently can be part of establishing P) — and are in scope when a
-proof needs them.
-
-## Confirmed gaps between principles and v0
-
-Updated 2026-07-14: the six gaps below were **confirmed by reading the code**
-(previously static-read hypotheses), with `file:line` references.
-
-The overarching finding: probatum's own three dogfooding promises are currently
-either vacuous or violated. If probatum cannot keep its own promises, its verdict
-on others' promises is not yet trustworthy. Making PROOF-001/002/003 truly green
-is the priority.
-
-- **PROOF-001** (same seed → same verdict): *vacuously true*. `random_seed()`
-  (`src/main.rs:73`) is drawn but drives nothing in v0, so determinism is trivial.
-  It becomes meaningful only once `matrix:` mutations exist.
-- **PROOF-002** (never leaves an orphan): *violated*. The correct group-kill
-  teardown (`src/runner.rs:106`) only iterates `services`; a service that times
-  out does `child.kill()` alone (`src/runner.rs:263`) — killing the `sh -c`, not
-  the group — and is never pushed into `services`. Same on the die-before-ready
-  path.
-- **PROOF-003** (evidence complete even on blow-up): *violated*. `run.json` is
-  written only at the end of the nominal path (`src/runner.rs:131`); there is no
-  RAII / panic guard. A panic between spawning a service and the teardown loop
-  leaks an orphan (PROOF-002) *and* leaves no `run.json` (PROOF-003) — one cause,
-  two broken promises.
-
-The six specific gaps:
-
-1. A service that dies before readiness is not added to `services`, so its boot
-   errors escape the global `logs.clean` oracle — the oracle reports "held"
-   (green) while the step failed with ERROR lines: **self-contradictory
-   evidence**. `src/runner.rs:218` vs `src/runner.rs:301`. (medium)
-2. Readiness timeout calls `child.kill()` without killing the group or `wait()`ing
-   → orphan. `src/runner.rs:263`. (**high — PROOF-002**)
-3. `run.json` written only on the nominal path, no panic guard.
-   `src/runner.rs:131`. (**high — PROOF-003**)
-4. `api.check` references a `log_file` it never creates → artifact pointing at
-   nothing. `src/runner.rs:284`. (low)
-5. `logs.clean.level` silently ignored and unknown fields not rejected → "strictly
-   declarative" is overstated. `src/manifest.rs:145`, `src/manifest.rs:167`. (medium)
-6. `next_run_dir` is max+1 with no atomicity → collision under concurrency, which
-   blocks the multi-agent MCP vision. `src/runner.rs:388`. (medium)
-
-The strongest single fix: a run-scoped RAII guard (`Drop`) owning `services` +
-`run_dir` that, on destruction including panic, kills every process group and
-writes a partial `run.json`. One shared exit point closes #2 and #3 on all paths.
-
-### RAII and evidence finalization are related but distinct
-
-The initial RAII proposal is refined as follows:
-
-- a `Drop` guard makes a best-effort teardown attempt unavoidable, including
-  during panic unwinding — but it does only non-panicking work (`libc::kill` on
-  the process groups, bounded reaping where possible), no allocation and no
-  serialization;
-- an explicit `catch_unwind` boundary around the run body produces the public
-  `run.json` for every unwinding outcome.
-
-Serializing and writing the report directly from `Drop` is not just fragile, it
-is dangerous: in Rust, a panic *while already unwinding* (a panic inside a `Drop`
-that runs during unwind) calls `abort()` — the process dies and no evidence is
-written, worse than today. Fallible work therefore belongs in the `catch_unwind`
-boundary, not in `Drop`.
-
-The verdict/outcome model (single source of truth, replacing the earlier
-conflicting lists):
-
-- `verdict: held | violated | inconclusive` — the promise axis; maps to the
-  human UI green / red / grey ("I don't know" is grey, not red);
-- `error: { kind, message }` — present only when `inconclusive`, with
-  `kind ∈ { invalid_manifest, execution_error, internal_error, interrupted }`.
-
-Mixing a real proof result (`violated`) with a tooling failure
-(`invalid_manifest`) in one field would force every consumer to know all values
-just to answer "did the promise hold?". Two fields serve the two readers: the
-human reads `verdict`, the machine switches on `error.kind` (invalid_manifest →
-do not retry, execution_error → maybe retry, internal_error → report a bug).
-
-"A file always exists" and "the evidence is complete" are separate guarantees —
-and neither can be absolute. `catch_unwind` covers exit, internal error and
-panic-unwind, but not a hard kill (SIGKILL, OOM, stack overflow, double-panic).
-The honest form of PROOF-003 is therefore: *`run.json` is guaranteed for every
-outcome probatum can observe while unwinding; an external hard kill stays out of
-scope.*
-
-### Replay fidelity
-
-Freezing the manifest in the run directory gives probatum a stable replay
-recipe, but not yet a hermetic replay. Commands may still depend on the current
-commit and files, toolchain versions, environment variables, network services,
-time and machine state.
-
-The accurate v0 term is therefore **frozen replay recipe** or **replay by
-reference**. A stronger replay guarantee would require capturing or controlling
-some combination of revision, working directory, environment, tool versions and
-external inputs.
-
-### The machine contract must cover tool failures
-
-If the agent is the first reader, `--json` must describe probatum's own failures
-as well as held or violated promises. The target property:
-
-> With `--json`, every outcome produces exactly one schema-valid JSON document
-> on stdout.
-
-Outcomes are expressed with the two-field model above (`verdict` +
-`error.kind`), not a flat enum. This has a concrete implementation consequence:
-`--json` must be parsed **before** manifest loading can fail, and every error
-path must emit a JSON document to **stdout** (human text staying on stderr) — a
-restructuring of `main.rs`, not only the runner. The document is a
-**discriminated union with optional fields**: `run_dir`, `steps` and `oracles`
-are absent when there is no run to report (e.g. `invalid_manifest`). Distinct
-process exit codes remain alongside the structured document.
-
-### Manifest trust boundary
-
-Strict validation prevents a generated manifest from silently claiming a check
-that was never performed. It does not make an arbitrary `cmd` safe to execute.
-The project must eventually state whether a manifest is:
-
-- trusted executable code;
-- an untrusted proof request governed by an authorization policy; or
-- accepted in both modes, with a restricted mode using closed drivers and no
-  unrestricted `sh -c` escape hatch.
-
-Sandboxing is not necessarily a v0 responsibility, but the trust assumption
-must be explicit before unsupervised agent loops become a supported use case.
-For v0 the declared mode is **trusted executable code** (the same trust as a
-Makefile one chooses to run); declaring the mode is a v0 responsibility, its
-enforcement is not.
-
-Key convergence: closing the vocabulary — typed drivers (`http.get`,
-`process.start` with an argv) instead of an open `sh -c` — makes enforceable
-sandboxing possible, and it simultaneously improves replay fidelity, because a
-typed driver is capturable and controllable where opaque shell is not. Typed
-drivers are not a security boundary by themselves: an argv can still invoke a
-destructive program, HTTP can enable SSRF, file operations can escape the
-workspace, and child processes inherit probatum's ambient authority.
-
-A future untrusted mode therefore requires the combination:
+This document is the durable product and engineering context for `probatum`.
+It records the current direction first; superseded ideas are kept only as a
+short history at the end.
+
+Last consolidated: 2026-07-21.
+
+## Product
+
+`probatum` is a test-oriented check runner:
+
+> One config file, embedded checks, only the failures that matter.
+
+It occupies the verification part of the developer loop. Like a focused
+Makefile or Taskfile, it runs operations in order, but it embeds the recurring
+verification mechanics: HTTP requests, output matching, external-log windows,
+process supervision, failure diagnosis and evidence capture.
+
+The first reader is an AI agent, with a human looking over its shoulder. The
+same contract must therefore be concise in a terminal, strict when generated by
+a machine, and stable as JSON.
+
+The original proof-engine framing (`proof`, `promise`, `oracle`, mutations and
+evidence registries) is superseded. Its useful engineering ideas survived in
+plain product language: ownership, deterministic diagnosis, replayable context,
+and the distinction between a failed check and a check that could not run.
+
+## Core model
+
+A check performs one operation and applies flat pass/fail rules to its
+observable result:
+
+```text
+check = one source + flat AND rules
+```
+
+Sources:
+
+- `run:` — execute a command; exit status is authoritative;
+- `run:` with `ready:`/`timeout:` — start and retain a service;
+- `get:` — perform an embedded HTTP GET;
+- `log:` — inspect an external file over this run's observation window.
+
+Rules:
+
+- `expect:` — exact HTTP status;
+- `contains:` — every declared pattern must appear;
+- `absent:` — no declared pattern may appear;
+- `allow:` — exempt known service-log noise from the default crash filter;
+- `name:` — display label.
+
+Rules form an AND. Two checks are also an AND and do not emulate OR. There is no
+general boolean logic, nesting, conditions, dependency graph or plugin system.
+A narrow list-valued rule such as `expect: [200, 204]` may be considered only
+after a real recurring need appears.
+
+Checks may mutate state. A cleanup or setup command is valid because the model
+is operation plus observable result, not pure assertion.
+
+## Frozen contract
+
+### Defaults
+
+- Plain `run`: non-zero exit is `failed`. Explicit `contains` and `absent`
+  still apply on exit 0. There is no implicit crash-marker scan because valid
+  test output can contain words such as `panicked at`.
+- Service: readiness accepts any 2xx. While the process is alive, default
+  markers (`panic`, traceback, `FATAL`, `ERROR`) are active because there is no
+  final exit code to trust. `allow` handles application-specific exceptions.
+- `get`: omitted `expect` means any 2xx; `contains` applies to the body.
+- `log`: at least one of `contains` or `absent` is required.
+
+The diagnostic filter is intentionally humble. It collapses output only when a
+signal is strong. Otherwise it reports the exit status and a short tail; it
+never invents a cause.
+
+### Outcomes
+
+- `pass` / exit 0 — all checks passed;
+- `fail` / exit 1 — execution produced sufficient evidence of a bad result;
+- `couldn't-run` / exit 2 — probatum could not execute or observe reliably
+  (invalid config, dirty environment, missing target, ambiguous log window,
+  internal tool error).
+
+Absence of evidence is not evidence of failure. This distinction prevents an
+agent or human from changing product code to chase an infrastructure problem.
+Checks stop at the first failure or error; later checks are marked skipped to
+avoid cascade noise.
+
+### Strict configuration
+
+Unknown keys are rejected. A machine-generated typo must never make the caller
+believe a check ran when it did not. The config stays a trusted executable input
+in v1: `run:` uses a shell and inherits probatum's ambient authority.
+
+Typed drivers make future policy enforcement possible, but are not a sandbox by
+themselves. A future untrusted mode would require:
 
 ```text
 typed drivers + policy/allowlist + OS isolation
 ```
 
-Two of the three design axes (manifest trust, replay fidelity) still converge on
-the same initial investment: shrink the `sh -c` surface and capture the
-environment. Only proof strength (perturbations, oracles) is orthogonal. The
-restricted-driver mode remains a high-leverage future step, but it is the basis
-for a sandbox, not the complete sandbox.
-
-### Violation versus inconclusive
-
-The central semantic boundary is whether a failed execution positively
-establishes that the promise is false or merely prevents probatum from deciding.
-The accepted invariant is:
-
-```text
-held         => the proof completed and every oracle held
-violated     => the proof completed sufficiently to establish at least one violation
-inconclusive => probatum could not establish either result reliably
-```
-
-A proof does not need to finish every planned step once a violation has been
-positively established. Conversely, absence of evidence is never evidence of
-absence. A timeout, missing executable, occupied port or unreachable endpoint
-cannot be classified from mechanics alone in every case: its meaning may depend
-on what the promise and oracle claim.
-
-The design question for each driver and oracle is therefore:
-
-> When does failed execution constitute evidence of violation, and when does it
-> make the proof inconclusive?
-
-Examples leaning toward `inconclusive` include probatum being unable to spawn a
-required tool or losing the ability to observe the target. A test suite that
-runs successfully and returns a defined failing result leans toward `violated`.
-Ambiguous infrastructure failures require explicit semantics rather than a
-blanket mapping.
-
-### Invocation outcome versus run report
-
-The machine-facing stdout document and the persisted `run.json` share a schema
-family but have different lifetimes and guarantees:
-
-```text
-invocation outcome  — exists for every observable CLI invocation
-run report          — exists only after a run has actually been created
-```
-
-For example, `invalid_manifest` can produce a structured invocation outcome
-without a `run_dir` or persisted `run.json`. The discriminated union must make
-that absence explicit rather than fabricate an empty run.
-
-All output guarantees have a physical ceiling. Disk full, an unwritable
-directory or a closed stdout pipe can prevent persistence or delivery. The
-architectural guarantee is that probatum constructs and attempts to emit exactly
-one schema-valid document for every observable outcome, provided the output
-channel remains available.
-
-Build and lint could not be verified in the first read (crates.io unreachable
-offline). `Cargo.lock` is present; the project builds offline now.
-
-## Proposed sequencing
-
-*(Pre-pivot. The engineering items survive — teardown guard, tracking all
-spawned services, strict validation, atomic run dirs; the proof-vocabulary
-items do not. See the post-pivot decisions and journal for the current plan.)*
-
-Order deliberately inverted: **core and dogfooding before vocabulary.**
-
-1. Run-scoped RAII guard (teardown + evidence finalization on every exit path) → #2, #3.
-2. Track dead/timed-out services (with their logs) and kill the group → #1, #2 coherent.
-3. `next_run_dir` with `O_EXCL` + retry → #6, unblocks concurrency.
-4. Reject unknown fields, honor `level` → #5, makes "strict" true.
-5. `api.check` writes its evidence log → #4.
-6. Turn PROOF-001/002/003 into hostile acceptance tests (timeouts, signals,
-   children and grandchildren, internal panic, concurrency).
-
-The guard should own teardown, while evidence finalization should have an
-explicit, schema-valid recovery path rather than relying on fallible work in
-`Drop`. The normal path performs controlled teardown and records its result;
-`Drop` is the non-panicking, best-effort safety net. System calls such as `kill`
-and `wait` can fail, so "infallible" means that the destructor itself never
-panics, not that cleanup is physically guaranteed.
-
-The feature backlog (`service.stop`, snapshots, Playwright, `matrix:`, MCP)
-becomes credible only afterward. `matrix:` is also what makes PROOF-001
-non-vacuous.
-
-## Open questions
-
-- ~~First user?~~ **Answered 2026-07-14**: the AI agent + the human over its shoulder.
-- What counts as a "proof" strong enough for probatum?
-- Which part of the output format must be stable from v0? (leaning: `run.json` is a
-  public contract now.)
-- Does replay promise the same scenario, the same verdict, or identical artifacts?
-- Which environment and input metadata must be captured before replay can claim
-  more than a frozen recipe?
-- How far should the manifest stay declarative with a closed vocabulary?
-- ~~Is a manifest trusted executable code or an untrusted proof request?~~
-  **Answered for v0**: trusted executable code. A future untrusted mode requires
-  typed drivers, enforceable policy and OS isolation.
-- How should each driver distinguish positive evidence of violation from an
-  infrastructure or observation failure that makes the proof inconclusive?
-- Which fields belong to the common schema family, and which are specific to an
-  invocation outcome or a persisted run report?
-- What are the exact zero-config defaults for each source (`run`, `get`, `log`)?
-- Should a small number of rules accept lists for common alternatives, or should
-  all OR semantics remain unsupported in v1?
-- What check-oriented tagline replaces or complements the historical proof
-  slogan?
-- What must durably differentiate probatum from a test runner or a check
-  orchestrator? (leaning: ownership + collapsed verdict + evidence/replay, not
-  driver count.)
-
-## Decisions
-
-### Post-pivot (2026-07-14)
-
-- **Pivot**: probatum is a test-oriented check runner — "a Makefile/Taskfile
-  with embedded features, oriented toward tests" — not a proof engine. The
-  promise/oracle ceremony is dropped from the config surface.
-- A check = one source (`run` | `get` | `log`) + a flat AND list of rules
-  (`expect`, `contains`, `absent`, `ready`/`timeout`). No OR, no nesting, no
-  logic in the config.
-- Primitives are embedded (HTTP client, log matching, process supervision);
-  no shell-out to curl/grep.
-- Zero-config crash detection is the default; `fail_on`/`allow` are per-app
-  exceptions. The filter never invents a cause: unsure → tail + exit code.
-- External log files: evaluated from run start only; a pre-existing target log
-  is not automatically dirty. Record its identity and offset, inspect only new
-  content, and report `couldn't-run` on ambiguous truncation/replacement. An
-  occupied port or already-running instance is dirty when it conflicts with a
-  service probatum intends to start.
-- Detection over destruction: probatum never purges what it doesn't own;
-  cleanup/setup is an ordinary first `- run:` check.
-- No plugin system; no template layer — one example config (and possibly a
-  `probatum init`) instead.
-- Sequential top-to-bottom execution in v1.
-- General OR/nested logic remains out of v1. Two checks do not express OR;
-  selected list-valued rules such as `expect: [200, 204]` remain an open design
-  option.
-- A check is allowed to mutate state: it performs one operation and applies
-  pass/fail rules to the observable result. Setup is pragmatic, not a pure
-  assertion.
-- Kept from before, renamed or unchanged: failed ≠ couldn't-run (was violated ≠
-  inconclusive); strict unknown-key rejection; `--json` versioned schema;
-  ownership/teardown as the core guarantee.
-- **Naming convention (owner's choice)**: tool = file = directory. The default
-  config is `probatum.yaml` at the repo root (`probatum run` with no argument
-  finds it, like make/Makefile); `.probatum/` holds secondary check files
-  (committed) and `.probatum/runs/` the evidence (ignored). "checks.yaml" was
-  too generic.
-
-### Pre-pivot (historical)
-
-Decisions below predate the pivot. Those tied to the proof vocabulary
-(promise/oracle naming, `held|violated|inconclusive`, seed/matrix, the
-evidence registry) are superseded in naming, but their engineering content
-largely carries over as noted in the pivot section.
-
-- Preserve the context of exchanges in this file at the project root.
-- **Documentation language is English** (README and this file translated
-  2026-07-14; the repo is international). Code output strings and the demo
-  manifest remain French for now — a later i18n pass if desired.
-- **Initialize the project as a git repository** (the evidence/replay story needs
-  version control); remove stray `:Zone.Identifier` WSL artifacts.
-- **Core and dogfooding before vocabulary**: honor PROOF-001/002/003 for real
-  before extending steps/oracles.
-- `run.json` is treated as a public contract and will be versioned.
-- probatum targets ad-hoc verification scripts, not general-purpose build or task
-  automation: its contract is to establish a proposition, not merely perform a
-  task.
-- The frozen manifest currently provides a replay recipe, not a hermetic replay;
-  replay strength must be described honestly and strengthened deliberately.
-- Process teardown belongs in a run-scoped RAII guard; fallible evidence
-  finalization should use an explicit recovery path rather than `Drop` alone.
-- Outcome model: `verdict: held | violated | inconclusive` plus an
-  `error { kind, message }` field (kinds: invalid_manifest, execution_error,
-  internal_error, interrupted). The human reads `verdict`; the machine switches
-  on `error.kind`.
-- `Drop` does best-effort, non-panicking teardown only; `run.json` is written
-  from a `catch_unwind` boundary. PROOF-003 is stated honestly: guaranteed for
-  every observable unwinding outcome while the evidence channel remains
-  writable, not against a hard external kill (SIGKILL, OOM, double-panic).
-- v0 declares manifests to be **trusted executable code**; enforcement via
-  restricted typed drivers is a later milestone. Closing the vocabulary makes
-  enforceable sandboxing possible and improves replay fidelity, but typed
-  drivers alone are not a sandbox; an untrusted mode also needs policy and OS
-  isolation.
-- `--json` will guarantee exactly one schema-valid document per outcome on
-  stdout (discriminated union, optional fields); this requires parsing `--json`
-  before manifest load.
-- Verdict invariant: `held` means all applicable oracles held; `violated` means
-  sufficient positive evidence established at least one violation;
-  `inconclusive` means neither result could be established reliably. Absence of
-  evidence is not evidence of absence.
-- Distinguish the invocation outcome emitted for every observable CLI invocation
-  from the persisted run report, which exists only once a run has been created.
-- Output and evidence guarantees are conditional on their physical channels
-  remaining writable; probatum guarantees construction and attempted emission,
-  not success against disk-full, permissions failure or a closed pipe.
-- Normal execution performs controlled teardown and reports its result; `Drop`
-  is a best-effort, non-panicking safety net. Cleanup system calls may fail.
-
-## Journal
-
-### 2026-07-14 — Opening the discussion
-
-- The project is presented as a fresh v0.
-- A first overall opinion is positive: clear identity, strong proposition, good
-  product potential.
-- Several gaps between the announced guarantees and some v0 paths were flagged for
-  discussion.
-- Decision: keep the context of exchanges in this file at the project root.
-
-### 2026-07-14 — Direction: agent ergonomics first, then RAII core
-
-- Chosen order: **(b) ephemeral agent-generated manifests first**, then the RAII
-  core. probatum is built for agents and other chaining/orchestration.
-- Caveat recorded: sequence the *work* ergonomics→RAII, but do not put a real
-  agent loop on it before the RAII guard lands (easy invocation + orphan leak =
-  an efficient orphan factory).
-- Landed (agent-ergonomics slice, verified end-to-end offline):
-  - manifest from stdin (`probatum run -`) — no temp file;
-  - frozen replay recipe: `replay` references the frozen `manifest.yaml` under
-    the run dir, not a mutable origin path (works for stdin too); this is not yet
-    a hermetic replay because the execution environment and inputs are not
-    frozen;
-  - `run.json` gains a `schema` version field and a `source` field ("<stdin>" or a
-    path) — first step of treating `run.json` as a public contract.
-- Deferred: structured multi-failure output for `--json` (human verdict collapses
-  to one cause; the machine contract should carry per-step failure lists). Next
-  after the RAII core.
-
-### 2026-07-14 — Code-grounded review and direction
-
-- Full read of the ~918-line codebase.
-- The six gaps were confirmed against the code with `file:line` references.
-- Key finding: probatum does not yet keep its own three dogfooding promises
-  (PROOF-001 vacuous, PROOF-002 and PROOF-003 violated); a single missing RAII
-  guard breaks two of them.
-- Vision clarified: probatum is the clean-output executor for static/dynamic
-  (incl. LLM-generated) checks, replacing ad-hoc command chaining and
-  Makefile/Taskfile scripts. First user = the agent + the human over its shoulder.
-- Decisions: docs in English, init the git repo, core+dogfooding before
-  vocabulary, `run.json` as a public contract.
-
-### 2026-07-14 — Proof boundary, replay fidelity and manifest trust
-
-- Clarified that probatum replaces ad-hoc verification scripts, not Makefiles or
-  Taskfiles as general automation systems: "do X" and "establish P" are
-  different contracts.
-- Refined the RAII design: `Drop` guarantees teardown; explicit finalization or
-  recovery produces a schema-valid report, including incomplete outcomes.
-- Reclassified the current replay feature as a frozen replay recipe rather than
-  a hermetic replay.
-- Raised a machine-contract target: under `--json`, every outcome should produce
-  exactly one schema-valid JSON document on stdout.
-- Identified the manifest trust boundary: strict parsing does not make arbitrary
-  shell commands safe. Trusted-code, policy-governed and restricted-driver modes
-  remain to be decided.
-- The three connected design axes are now: **proof strength, replay fidelity and
-  manifest trust**.
-
-### 2026-07-14 — Outcome model, abort ceiling, trust/vocabulary convergence
-
-- Reconciled the two conflicting outcome lists into one model: `verdict`
-  (held | violated | inconclusive) plus `error { kind, message }`.
-- Named the abort ceiling: `catch_unwind` cannot catch SIGKILL/OOM/double-panic,
-  so PROOF-003 is stated as guaranteed only for observable unwinding outcomes.
-- Corrected two earlier points: "hermetic replay" was an overclaim (it is a
-  frozen replay recipe); writing `run.json` from `Drop` is dangerous (a panic
-  during unwind → `abort()`), so finalization moves to a `catch_unwind` boundary
-  and `Drop` does best-effort, non-panicking teardown only.
-- Established the convergence: closing the vocabulary (typed drivers, no `sh -c`)
-  is both the sandboxing strategy and a replay-fidelity improvement — two of the
-  three axes share one investment.
-- Next: implement the RAII core to this design (Drop teardown + catch_unwind
-  finalize + ternary verdict + error.kind).
-
-### 2026-07-14 — Verdict semantics and guarantee boundaries
-
-- Defined the core verdict invariant: `violated` requires positive evidence;
-  inability to establish either truth or violation is `inconclusive`.
-- Recognized that failed execution cannot always be classified from mechanics
-  alone. Each driver/oracle must define when timeout, spawn failure or lost
-  observation is evidence versus infrastructure failure.
-- Corrected the security model: typed drivers enable enforceable policy but are
-  not themselves a sandbox. A future untrusted mode needs typed drivers,
-  policy/allowlists and OS isolation.
-- Distinguished the stdout invocation outcome from the persisted run report;
-  invalid input can have the former without creating the latter.
-- Scoped output guarantees to observable outcomes and available physical
-  channels. probatum attempts exactly one schema-valid document but cannot
-  defeat disk-full, permission failures or a closed stdout pipe.
-- Refined teardown: the explicit path performs and reports controlled cleanup;
-  `Drop` remains a non-panicking, best-effort last line of defense.
-
-### 2026-07-14 — Pivot: "I have nothing to prove"
-
-- The owner rejected the proof framing bluntly: no promises, no oracles — just
-  "one line, one config file, run my checks, surface only what matters". The
-  proof vocabulary was overhead, not value.
-- Reframed as: Makefile/Taskfile-like, test-oriented, with embedded features
-  (curl, grep, process supervision built in; the user declares the pass/fail
-  rules).
-- Settled through discussion: source × flat-rules model (`run`/`get`/`log` ×
-  `expect`/`contains`/`absent`); features not plugins; humble noise filter
-  with zero-config crash defaults; external logs read from run start;
-  pre-existing log = dirty environment; detection over destruction (never
-  purge what probatum doesn't own — setup is the user's own first check);
-  no template layer (an example config *is* the template); sequential
-  execution.
-- A concrete example config format was drafted and approved by the owner.
-- Working-tree note: an unsolicited code rewrite to the flat syntax exists,
-  compiled and verified end-to-end, **uncommitted and paused** at the owner's
-  request ("we're discussing — don't code"). It predates the `log:` source,
-  the run-start window and dirty-env detection; reconcile or discard it when
-  implementation resumes.
-- Next, when the owner says go: reconcile the rewrite with this design, add
-  `log:` + run-start window + dirty-env detection, then the teardown (RAII)
-  core that makes the ownership guarantee true.
-
-### 2026-07-14 — Contract frozen, post-pivot v1 implemented
-
-- The owner's refinements were reviewed and accepted; one of them corrected
-  the assistant twice (OR-is-not-two-checks; typed drivers ≠ sandbox earlier).
-- Two remaining defaults settled by the owner: `get` without `expect` = any
-  2xx; `log` without rules = config error.
-- Implemented and verified end-to-end (12 scenarios, offline):
-  sources `run`/service/`get`/`log`; rules `expect`/`contains`/`absent`/`allow`;
-  run-start offset window with inode+size rotation/truncation detection;
-  dirty-environment refusal (ready URL answering pre-start); stop-on-first-
-  failure with skipped display; verdict pass/fail/couldn't-run and exit codes
-  0/1/2; strict rejection of unknown keys, rule-less `log`, and `allow` on a
-  plain run.
-- Demo fixed: `segment-0004.json` is now shipped (the repo previously shipped
-  the demo already broken while the README said to break it by hand);
-  `proofs/` renamed to `checks/`; README rewritten to the post-pivot product.
-- Known deviation flagged for owner review: empty log window with
-  `absent`-only rules = explicit pass "(0 new lines)", not couldn't-run.
-- Still open, next: the panic-safe teardown guard (ownership on probatum's own
-  crash paths), `probatum init`, product tagline.
-
-### 2026-07-14 — Ownership on every exit path + `probatum init`
-
-- Owner confirmed: if probatum itself dies, everything it started must be
-  killed. Implemented as a lock-free process-group registry (`src/own.rs`,
-  async-signal-safe atomics): children register at spawn; the registry is
-  swept with SIGKILL on every exit path — normal end (explicit teardown),
-  panic unwinding (`Drop` guard, kill-only, non-panicking per the frozen
-  design), SIGINT and SIGTERM (signal handler, then `_exit(130)`).
-- Plain `run:` commands now also get their own process group: a command that
-  leaks background children gets swept at run end too.
-- Verified: panic mid-run (exit 101), SIGINT and SIGTERM mid-run (exit 130) —
-  port clean and no leftover processes in all three cases. A first "leak"
-  finding was a false positive: `pgrep -f` matched the test harness's own
-  command line.
-- Ceiling stated honestly: SIGKILL of probatum itself remains uncoverable (no
-  handler, no unwinding); that path leaks until a wrapper/supervisor exists.
-- `probatum init` ships: writes a commented `checks.yaml` example, refuses to
-  overwrite an existing one. First generated example had a YAML parse bug
-  (unquoted `:` in a scalar) — caught by running the generated file, fixed.
-
-### 2026-07-14 — Dogfooding: probatum checks probatum
-
-- A root `checks.yaml` now runs probatum on itself: build, clippy, the demo
-  end-to-end (service + HTTP + external log), and two inverted negative
-  scenarios asserting exit code exactly 1 ("probatum MUST report this as a
-  caught failure; exit 2 would mean couldn't-run").
-- One mock, several failure stories via env switches on `demo-app/app.py`
-  instead of several mock apps: `WAL_DIR` (boot crash), `DEGRADE=1` (ready,
-  then logs ERROR), `LOG_FILE` (writes an external log for `log:` checks).
-- **The dogfooding caught a real bug on its first run**: the degraded mock
-  logged ERROR after readiness and probatum said "all passed" — the service
-  default filter only had crash-class markers (panic/FATAL/traceback) while
-  the frozen contract says "panic, traceback, FATAL, ERROR out of the box".
-  Doc/code gap fixed (ERROR/error: added to the service default markers).
-- Side validation: the three nested runs share port 8087 sequentially, so any
-  teardown leak would trip the dirty-env refusal on the next run — ownership
-  is implicitly re-proven on every dogfooding run.
-- This replaces the pre-pivot PROOF-001/002/003 idea in the product's own
-  language: the acceptance tests are a probatum config.
-
-### 2026-07-14 — Naming: probatum.yaml / .probatum/
-
-- Owner rejected "checks.yaml" as too generic; chose the tool-name convention:
-  `probatum.yaml` (default config, found by a bare `probatum run`),
-  `.probatum/` for secondary configs (committed: dev-check, broken-check,
-  degraded-check) and `.probatum/runs/` for evidence (ignored).
-- `probatum init` now writes `probatum.yaml`; a bare `probatum run` without a
-  config gives a helpful error pointing at init.
-
-### 2026-07-15 — Boundary with cidx settled
-
-- Reviewed the owner's cidx project against probatum: no structural duplicate
-  (tools-against-source vs behavior-of-running-system), one honest overlap
-  strip (any command runs in either).
-- Owner's framing accepted: custom cidx stages could reach the same result,
-  but probatum concentrates those tests into one more powerful, more
-  expressive runner — both tools are good, each keeps its lane.
-- Decision: probatum belongs to the **test phase** of the DevOps loop —
-  `cidx run test` includes it (preset alongside e.g. go-test), no separate
-  smoke phase. Boundary and both-ways guardrails recorded above.
-- Deferred packaging item: static binary or small image for cidx's
-  containerized presets.
-- Follow-up question settled: **separate tools, no merge into cidx**. cidx
-  orchestrates external tools by design; probatum joins the roster as one of
-  them. Inner loop = `probatum run` direct; outer loop = `cidx run test` via
-  preset; both read the same `probatum.yaml` (one source of truth).
-
-### 2026-07-15 — Packaging: static musl binary + container image
-
-- Network was available; the packaging item landed the same day:
-  `x86_64-unknown-linux-musl` target added, static binary builds offline from
-  cached crates (977 KB, `statically linked`, stripped) and passes the full
-  dogfooding suite as the outer runner.
-- `Dockerfile`: alpine 3.20 + the binary (13.6 MB image), `ENTRYPOINT
-  probatum`, `CMD run`. **alpine, not scratch, deliberately**: `run:` checks
-  spawn `sh -c`, so the image needs a shell; busybox provides it. Project
-  toolchains are explicitly NOT shipped — they belong to the pipeline's own
-  images. `.dockerignore` whitelists only the binary (tiny build context).
-- Verified: config piped from stdin runs green inside the container.
-- The cidx preset itself remains cidx-side work (mounting the workspace,
-  network to reach services under test).
-
-### 2026-07-15 — Dogfooding completeness pass
-
-- Honest inventory: the suite covered the green path and two caught failures,
-  but asserted none of the exit-2 guardrails — while failed ≠ couldn't-run is
-  frozen product identity. Five checks added (10 total now):
-  - never-ready service times out → exit 1 (locks the historic timeout-orphan
-    path's semantics);
-  - config typo refused → exit 2; missing log file → exit 2 (couldn't-run,
-    not failed); dirty environment (intruder already on the port) → exit 2;
-  - **ownership survives probatum's own crash**: PROBATUM_TEST_PANIC run must
-    exit 101 AND leave the port free (`demo-app/tests/portfree.py`).
-- New mock switch: `HANG=1` (boots fine, never opens the port). The mock now
-  plays five stories: green, boot-crash, degrade-after-ready, external log,
-  never-ready.
-- `.probatum/invalid-key.yaml` is committed *intentionally invalid* — it
-  exists to be refused.
-
-### 2026-07-15 — Agent adoption story: self-describing tool + in-context snippet
-
-- Question raised: separate agent doc, or keep the human README? Settled on
-  the layered model, from the agent's actual perspective:
-  1. the target repo's CLAUDE.md/AGENTS.md is injected into agent context
-     (the README is not) → a 5-line Verification snippet there is THE lever;
-  2. agents learn fastest from executable truth: `--help`, teaching error
-     messages, `probatum init`'s runnable example;
-  3. the README stays the single source of truth — no FOR_AGENTS.md
-     paraphrase (duplication drifts).
-- Implemented: full `probatum --help` (the whole config surface, defaults,
-  exit codes, ownership guarantee in ~40 lines — an agent can use probatum
-  from this text alone); README section "Adopting probatum in a repo" with
-  two ready-to-paste blocks (the CLAUDE.md snippet + the one-time migration
-  prompt, both self-sufficient — no external URLs).
-- Dogfooded: a check asserts --help stays complete (`contains` on the key
-  surface terms). Suite is now 11 checks.
-
-### 2026-07-16 — Published, packaged, integrated into cidx
-
-- Repo pushed to github.com/probatum-org/probatum (public, MIT — aligned with
-  cidx).
-- Registry decision: **GHCR, not Docker Hub** — matches cidx's own pattern
-  (ghcr.io/cidx-org/cidx), zero secrets (GITHUB_TOKEN), org already exists.
-  Container lives in the same repo (Dockerfile is version-locked to the
-  source), not a separate one.
-- CI: `probatum run` (the full 11-check dogfooding suite) on every push/PR.
-  Release: on `v*` tags, musl build + ghcr.io/probatum-org/probatum
-  {version,latest}. v0.1.0 tagged; both workflows green in ~40 s.
-- cidx integration: `[presets.probatum]` (phase = "test", image = the GHCR
-  0.1.0, command = "run") + docs/reference/tools.md entry — PR cidx-org/cidx#160,
-  CI green, marked ready. No `config` option: `probatum run` defaults to
-  probatum.yaml, and an unverified flag mapping would have been a guess.
-- Remaining manual step: GHCR container packages born from Actions are
-  private and visibility is UI-only — flip to Public in the package settings,
-  otherwise the preset's pull fails anonymously.
-
-### 2026-07-16 — Both-ways dogfooding: cidx runs in probatum
-
-- Owner made the repo/image public; cidx PR #160 merged (squash + branch
-  cleanup via `cidx pr merge`); anonymous pull of the GHCR image verified.
-- `cidx init` in probatum: phases security (trivy, gitleaks), code (clippy,
-  rustfmt), test (cargo-test + **probatum**), build (cargo-build). Full local
-  `cidx run ci` green in 13 s — including probatum running inside its own
-  GHCR container, launched by cidx. The loop closes both ways.
-- The in-container split, applied to probatum's own repo: the stock preset
-  runs ./probatum.yaml, which here needs the host toolchain (cargo, python3).
-  Project-level override (`.cidx/presets.toml`) points the container at
-  `.probatum/selfcheck.yaml` — a config that proves the *shipped image* works
-  (binary self-describes via --help rules, shell present). The full dogfooding
-  suite keeps running natively in ci.yml.
-- `prettier`/`commitizen` dropped from code phase (nothing to format, history
-  is not conventional-commits). `rustfmt` immediately caught unformatted code
-  — fixed with cargo fmt, dogfooding re-verified green.
-- **cidx-side improvement candidates found while integrating** (not probatum
-  work): the cargo-audit preset compiles the tool from source at runtime
-  (slow, fragile — failed here; dropped from probatum's security phase since
-  trivy already scans Cargo.lock); local `cidx` pull of dhi.io images asked
-  for auth while a plain `docker pull` succeeded anonymously; **preset drift
-  between released cidx and main** — the CI bootstrap installs cidx@latest,
-  whose rustfmt preset lacks the `rustup component add` that main has, so
-  CIDX CI failed on GitHub while passing locally. Worked around with a
-  project-level rustfmt override in `.cidx/presets.toml`.
-- Final state: both workflows green on GitHub — `ci` (native dogfooding,
-  1m06) and `CIDX CI` (containerized pipeline incl. probatum-in-container,
-  1m48). The loop is closed and verified both locally and in CI.
-
-### 2026-07-16 — cidx issues filed; SIGINT lock closes the last known gap
-
-- The three cidx findings are now issues, owner will handle them:
-  cidx-org/cidx#161 (cargo-audit runtime compilation), #162 (dhi.io pull vs
-  anonymous docker pull), #163 (released-vs-main preset drift + version
-  pinning in generated workflows).
-- Last known dogfooding gap closed: **ownership survives Ctrl-C** — an outer
-  check backgrounds a probatum run (`.probatum/sigint-check.yaml`: demo
-  service holding the port + long sleep), sends SIGINT, asserts exit 130 AND
-  the port freed. Suite is now 12 checks, all green.
-- Every exit path of the ownership guarantee is now locked by a check:
-  normal end (implicit via sequential port reuse), panic (101), SIGINT (130).
-  Only SIGKILL of probatum itself remains uncoverable — physics, recorded.
-
-### 2026-07-19 — cidx 2.1.0 tested; two new upstream findings
-
-- cidx 2.1.0 fixes #161/#162/#163 as filed (cargo-audit downloads the release
-  binary; rustfmt has its component add; `generate` now warns about
-  local-vs-CI preset parity). probatum updated: rustfmt override removed,
-  cargo-audit back in [security], workflow regenerated.
-- **New root cause found behind the drift (#187)**: cidx's go.mod lacks the
-  `/v2` module-path suffix, so `go install …@v2.1.0` is impossible and
-  `@latest` resolves to **v1.8.0** — every generated workflow bootstraps a
-  major behind. Workaround: probatum's CI bootstrap is pinned to the v2.1.0
-  commit (`@a02b85b`) until fixed.
-- **cargo-audit follow-up (#188)**: the 2.1.0 preset extracts to
-  /usr/local/bin — Permission denied in CI where the container runs
-  non-root (root masks it locally). Workaround: project override extracting
-  to /tmp with writable HOME/CARGO_HOME.
-- Both probatum workflows green with all of the above. #162 (dhi.io pull)
-  verified in CI; local re-test pending (Docker Desktop was down).
-
-## Feature proposals (2026-07-19)
-
-Formalized at the owner's request. Every candidate is judged against the
-admission test — *one operation, one observable result, flat pass/fail
-rules* — and ordered by how real the need already is. `probatum init` stays
-as-is (owner-approved).
-
-1. **`timeout:` on plain `run:`** — the one real gap: a hung command (test
-   deadlock, stuck migration) blocks a run forever; services have a deadline,
-   commands don't. Semantics: exceeding the declared budget = **failed**
-   (consistent with a service's not-ready-in-time). Passes the admission test
-   cleanly; smallest diff; highest safety value. *Recommended first.*
-2. **Structured multi-failure `--json` (schema 2)** — the deferred pivot
-   debt: a suite with 12 red tests currently collapses to one cause; the
-   machine contract should carry per-check failure lists so an agent can act
-   on all of them. Human output stays collapsed.
-3. **`expect: [200, 204]`** — list-valued status on one rule; still flat, not
-   a language. Parked until an actual endpoint needs it.
-4. **`${VAR}` interpolation** — same config across dev/staging URLs. Strictly
-   value substitution: no defaults, no conditionals — the day it grows an
-   `${X:-fallback}` it is a language. Parked until a real repo hurts.
-5. **MCP server (`probatum.run` as a tool)** — the agent endgame: no shell,
-   no parsing, structured verdict in-protocol. Worth doing after real agent
-   usage of `--json` shows what the tool schema should be.
-
-Watchlist (not proposed): `post:` (mutating HTTP — wait for a need that
-`get:` + `run: curl` can't serve), Windows support (owner is WSL-native),
-parallel checks (sequential is a v1 design decision, revisit only with a
-proof-driven need).
-
-### 2026-07-14 — Post-pivot semantic cleanup
-
-- Confirmed that the pivot is a genuine product improvement: the value is one
-  config, owned execution and aggressively useful output, not proof ceremony.
-- Corrected the proposed OR workaround: two checks are an AND, not an OR.
-  General boolean logic stays out; small list-valued rules remain undecided.
-- Corrected external-log cleanliness: a pre-existing file is normal and can be
-  observed from its initial identity/offset. Conflict or ambiguous
-  replacement/truncation, not existence alone, causes `couldn't-run`.
-- Identified source-specific zero-config defaults as part of the public config
-  contract; their exact semantics still need a decision.
-- Accepted that checks may mutate state. The general model is an operation plus
-  rules over its observable result, not a pure assertion.
-- Recognized that the historical proof slogan no longer describes the primary
-  product surface. A direct check-oriented tagline remains to be chosen.
-- The discussion file now contains two architectures. Historical sections must
-  remain clearly marked and should eventually move to an archive so future
-  context retrieval does not confuse superseded design with current direction.
+### Ownership
+
+Every spawned command or service receives its own process group. probatum tracks
+those groups and kills them on normal completion, check failure, panic unwind,
+SIGINT and SIGTERM. Explicit teardown is the controlled path; the non-panicking
+guard and signal handler are safety nets. SIGKILL/OOM remains outside any
+in-process guarantee.
+
+probatum detects conflicts but never destroys resources it does not own. If a
+service readiness URL already answers before startup, the environment is dirty
+and the run is refused. User-owned cleanup belongs in an explicit first `run:`
+check.
+
+### External logs
+
+For every `log:` source, probatum records file identity and size before checks
+begin, then evaluates only bytes appended during the run. Existing content is
+normal. Replacement or truncation makes the observation window ambiguous and
+therefore `couldn't-run`.
+
+### Evidence and machine output
+
+Every started run attempts to write `.probatum/runs/NNNN/` with the frozen
+config, one evidence log per check and a versioned `run.json`. `--json` is the
+machine surface. Physical failures such as a full disk, unwritable directory or
+closed stdout remain natural limits on persistence and delivery.
+
+The current seed is only a recorded replay reference; it drives no behavior and
+must not be described as hermetic replay. The frozen config is a replay recipe,
+while environment, tools and external state remain mutable.
+
+## Product boundaries
+
+probatum deliberately has:
+
+- a small curated source/rule vocabulary;
+- sequential top-to-bottom execution;
+- embedded verification primitives rather than shelling out to curl or grep;
+- no plugins, remote imports or template language;
+- no implicit cleanup and no CI orchestration.
+
+Build and deploy remain in general automation. probatum owns verification. The
+day ordinary configuration needs an `if`, the design has drifted.
+
+The historical slogan, `Don't trust the promise. Run the proof.`, remains part
+of the project's DNA but no longer describes its config surface. The current
+README pitch is authoritative. A shorter check-oriented tagline is still open;
+previous candidates were `Run the checks. See what matters.` and
+`One config. Clean checks. Useful failures.`
+
+## Boundary with cidx
+
+The projects stay separate:
+
+- cidx orchestrates tools against a repository across CI phases;
+- probatum verifies behavior through commands, services, HTTP and logs.
+
+Their environment responsibilities are deliberately different:
+
+- cidx may construct and isolate execution environments because it orchestrates
+  many heterogeneous tools and phases;
+- probatum must run **inside the project's chosen execution context**, as close
+  as possible to the system it verifies. It consumes that context; it does not
+  invent or provision a different one by default.
+
+That context may be the developer host, a devcontainer, a CI job, a cidx phase
+container or another project-owned environment. In every case, paths,
+toolchains, environment variables, localhost services and permissions are the
+project's real test context rather than an implicit probatum container.
+
+probatum belongs in cidx's `test` phase. The outer loop is `cidx run test` or
+`cidx run ci`; the inner developer/agent loop calls `probatum run` directly.
+Both use the repository's `probatum.yaml` as the verification source of truth.
+
+The public project is packaged as a static musl binary and a small Alpine-based
+GHCR image. Alpine is intentional: `run:` currently needs `/bin/sh`. The image
+does not bundle project toolchains. It is an optional packaging/integration
+surface, not the default execution model and not a universal test environment.
+
+The concise rule is:
+
+> cidx may build the context; probatum runs inside it.
+
+Or, from probatum's point of view:
+
+> probatum is context-native, not environment-provisioning.
+
+## Current implementation state
+
+Implemented and dogfooded:
+
+- default `probatum.yaml`, stdin configs and `probatum init`;
+- strict flat parsing for `run`, service, `get` and `log`;
+- source-specific defaults and `failed` versus `couldn't-run`;
+- timestamped stdout/stderr capture and concise deterministic diagnosis;
+- post-readiness service-log scanning;
+- external-log identity/offset windows;
+- process-group teardown on normal exit, panic, SIGINT and SIGTERM;
+- versioned JSON reports and frozen configs;
+- static binary, GHCR image, GitHub CI/release and cidx integration;
+- a 12-check self-verification config covering green, negative, error and
+  ownership paths.
+
+The dogfooding suite has already found a real regression: an `ERROR` emitted
+after service readiness was initially missed. The default service filter was
+corrected and the scenario remains locked as an acceptance check.
+
+Validation on 2026-07-21:
+
+- `cargo test --offline`: green (there are currently no Rust unit tests);
+- `cargo clippy --offline -- -D warnings`: green;
+- full `probatum run` dogfooding outside the restricted Codex sandbox: all 12
+  checks green, including service/HTTP/log checks, negative outcomes, panic
+  ownership and Ctrl-C ownership;
+- an earlier attempt inside the restricted Codex sandbox failed because that
+  sandbox forbids socket creation (`PermissionError: Operation not permitted`).
+  This is expected environmental isolation, not a probatum regression. Because
+  the child process started and then crashed, probatum classified the observed
+  result as `failed`; the runner cannot always infer whether an OS-level denial
+  is application behavior or infrastructure policy.
+
+## Known engineering debt
+
+These do not invalidate the product direction, but they are the most important
+remaining robustness items visible in the current code:
+
+1. Plain `run:` has no timeout; a hung test can block the entire run forever.
+   Today `timeout:` itself classifies a `run` as a service even without `ready:`,
+   so command timeout needs an explicit service/command disambiguation rather
+   than merely reusing the key.
+2. Unknown keys are strict, but invalid value types are not always strict:
+   malformed `contains`/`absent` values can collapse to empty lists, an invalid
+   `timeout` can fall back to 30, and oversized HTTP status integers are cast to
+   `u16`. Machine-generated config requires type and range errors to be rejected.
+3. Run-directory allocation uses `max + 1` without atomic creation, so concurrent
+   invocations can collide.
+4. Process registration has a fixed 64-slot table and silently stops registering
+   beyond it; the config is sequential, but completed command groups are never
+   unregistered during a run. Besides exhausting slots, stale PIDs create a
+   theoretical PID-reuse risk during a sufficiently long invocation.
+5. Some evidence writes deliberately ignore I/O errors. That is acceptable for
+   best-effort diagnostics, but `run.json` persistence and reported artifact
+   paths should eventually state failures honestly.
+6. `--json` does not yet guarantee structured output for errors that occur before
+   a run report exists (for example invalid config in `main`).
+7. Rust behavior is exercised mainly through end-to-end dogfooding; focused unit
+   tests for strict parsing, matching and outcome classification would make edge
+   cases cheaper to verify.
+8. Source comments in `main.rs` still contain the superseded proof/manifest/seed
+   wording and should be aligned with the current product.
+
+## Next candidates
+
+Admission test for any feature:
+
+> One operation, one observable result, flat pass/fail rules — backed by a real,
+> recurring need.
+
+Ordered candidates:
+
+1. **Strict value and range validation** — finish the unknown-key promise: wrong
+   rule types, timeouts and HTTP statuses must fail loudly rather than default or
+   truncate.
+2. **Command timeout with explicit service disambiguation** — closes the only
+   obvious unbounded execution path without making `run + timeout` ambiguous.
+   Exceeding an explicitly declared budget is `failed`, consistent with a
+   service that never becomes ready.
+3. **Atomic run-directory allocation** — small robustness fix before concurrent
+   agent use grows.
+4. **Complete structured error output for `--json`** — every observable CLI
+   outcome should produce one versioned machine document when stdout is writable.
+5. **Structured multi-failure detail in a future schema** — only if agent usage
+   demonstrates that one collapsed cause is insufficient. Sequential stop-first
+   remains the human contract.
+6. **`expect: [200, 204]`** — flat and understandable, but wait for an actual
+   endpoint requiring it.
+7. **Strict `${VAR}` substitution** — no defaults or conditionals; wait for a
+   repository that genuinely needs shared environment-specific configs.
+8. **MCP tool surface** — after real `--json` usage stabilizes the protocol.
+
+Watchlist, not planned: Windows support and parallel checks. (Mutating HTTP
+left the watchlist 2026-07-27: `post:` shipped against issue #1 — the first
+real need `get:` + `run: curl` couldn't serve.)
+
+## Decisions still open
+
+- Choose whether the historical slogan remains secondary branding or is retired.
+- Decide the exact JSON error envelope before calling the machine contract stable.
+- Decide whether replay/environment metadata deserves expansion; do not call the
+  current recipe hermetic.
+- Revisit trusted versus restricted execution only when there is a concrete
+  unsupervised-agent deployment requiring it.
+- Decide only from a real recurring need whether probatum should eventually own
+  container lifecycle as an explicit `container:` source. Containers will not
+  become the implicit/default execution model.
+
+## Condensed history
+
+- **2026-07-14 — initial v0 review:** the original proof engine had a clear idea
+  but overstated teardown, evidence completeness and replay guarantees.
+- **2026-07-14 — pivot:** the owner rejected proof ceremony in favor of the real
+  need: one config, run checks, show only useful failures. The flat source/rule
+  model and `failed`/`couldn't-run` distinction were established.
+- **2026-07-14 — v1 implementation:** `run`, service, `get`, `log`, strict keys,
+  defaults, evidence, init and ownership paths landed; probatum began checking
+  itself.
+- **2026-07-15 — hardening:** negative scenarios, dirty environment, missing
+  logs, timeout, panic and Ctrl-C ownership were added to dogfooding. Packaging
+  and the cidx boundary were settled.
+- **2026-07-16 — publication:** GitHub, MIT licensing, GHCR, CI/release workflows
+  and the cidx preset landed. cidx and probatum now exercise each other.
+- **2026-07-19 — integration feedback:** cidx 2.1.0 was tested; upstream bootstrap
+  and non-root cargo-audit issues were reported with local project workarounds.
+- **2026-07-21 — consolidation:** this file was rewritten around current truth;
+  superseded proof-engine analysis and the chronological implementation diary
+  were condensed.
+- **2026-07-21 — validation clarification:** the full 12-check dogfooding suite
+  passed outside the socket-restricted Codex sandbox. The earlier red run was an
+  environment refusal, not a test regression.
+- **2026-07-21 — execution context:** decided that probatum must execute inside
+  the project's chosen test context. Unlike cidx, it does not provision or
+  replace that context by default. Its container image remains optional
+  packaging; a future explicit container source requires a demonstrated need.
+- **2026-07-27 — `post:` shipped (issue #1):** first external-shaped issue: a
+  write path forced a drop to `run: curl` (no status/body assertion, curl's
+  "exited 22" instead of the server's answer). Shape as suggested: `post:` +
+  `body:` + flat `headers:` (Content-Type defaults to application/json with a
+  body), same `expect`/`contains`; `get`/`post` unified internally. Out of
+  scope per the issue itself: auth, cookies, response capture. Demo gained the
+  write-then-read assertion; dev-check now 8 checks, suite still 12.

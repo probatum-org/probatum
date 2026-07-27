@@ -54,6 +54,9 @@ config: a flat YAML list. one check = one source + flat AND rules.
   - get: <url>                  HTTP GET; omitted expect = any 2xx
     expect: <code>              exact status
     contains: [..]              body must contain
+  - post: <url>                 HTTP POST; same rules as get, plus:
+    body: <string>              request body (Content-Type defaults to
+    headers: {k: v}             application/json when body is set)
   - log: <path>                 external file, only lines written during THIS
     contains: [..]              run count; at least one rule required
     absent: [..]

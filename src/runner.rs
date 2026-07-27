@@ -138,12 +138,24 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 out.len(),
                 &mut services,
             ),
-            Check::Get {
+            Check::Http {
+                method,
                 url,
+                body,
+                headers,
                 expect,
                 contains,
                 ..
-            } => run_get(url, *expect, contains, &log_file, check),
+            } => run_http(
+                method,
+                url,
+                body.as_deref(),
+                headers,
+                *expect,
+                contains,
+                &log_file,
+                check,
+            ),
             Check::Log {
                 path,
                 contains,
@@ -418,20 +430,34 @@ fn run_service(
     }
 }
 
-fn run_get(
+#[allow(clippy::too_many_arguments)]
+fn run_http(
+    method: &str,
     url: &str,
+    body: Option<&str>,
+    headers: &[(String, String)],
     expect: Option<u16>,
     contains: &[String],
     log_file: &Path,
     check: &Check,
 ) -> CheckReport {
-    match crate::http::get(url, Duration::from_secs(5)) {
+    // A body without an explicit content-type defaults to JSON — the 99% case
+    // for smoke-testing an API (documented in --help).
+    let mut hdrs = headers.to_vec();
+    if body.is_some()
+        && !hdrs
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+    {
+        hdrs.push(("Content-Type".into(), "application/json".into()));
+    }
+    match crate::http::request(method, url, body, &hdrs, Duration::from_secs(5)) {
         Ok(resp) => {
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");
             let _ = std::fs::write(
                 log_file,
-                format!("GET {url}\nHTTP {}\n\n{head}\n", resp.status),
+                format!("{method} {url}\nHTTP {}\n\n{head}\n", resp.status),
             );
 
             let status_ok = match expect {

@@ -13,6 +13,16 @@ pub struct Response {
 
 /// `url` like `http://127.0.0.1:8080/healthz`
 pub fn get(url: &str, timeout: Duration) -> Result<Response> {
+    request("GET", url, None, &[], timeout)
+}
+
+pub fn request(
+    method: &str,
+    url: &str,
+    body: Option<&str>,
+    headers: &[(String, String)],
+    timeout: Duration,
+) -> Result<Response> {
     let rest = url
         .strip_prefix("http://")
         .context("only http:// URLs are supported in v0")?;
@@ -36,9 +46,17 @@ pub fn get(url: &str, timeout: Duration) -> Result<Response> {
     stream.set_write_timeout(Some(timeout))?;
     let mut stream = stream;
 
+    let body = body.unwrap_or("");
+    let mut extra = String::new();
+    for (k, v) in headers {
+        extra.push_str(&format!("{k}: {v}\r\n"));
+    }
+    if method == "POST" {
+        extra.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
     write!(
         stream,
-        "GET {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nUser-Agent: probatum/0.1\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: {hostport}\r\nConnection: close\r\nUser-Agent: probatum/0.1\r\n{extra}\r\n{body}"
     )?;
 
     let mut raw = String::new();

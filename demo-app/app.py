@@ -55,6 +55,19 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._reply(404, {"error": "not found"})
 
+    def do_POST(self):
+        if self.path == "/api/events":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                event = json.loads(self.rfile.read(length))
+                STATE[event["key"]] = event["value"]
+                log("INFO", f"http event stored key={event['key']}")
+                self._reply(200, {"stored": event["key"], "keys": len(STATE)})
+            except (KeyError, ValueError):
+                self._reply(400, {"error": "bad event"})
+        else:
+            self._reply(404, {"error": "not found"})
+
     def _reply(self, code, obj):
         body = json.dumps(obj).encode()
         self.send_response(code)

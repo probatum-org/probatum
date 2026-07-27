@@ -36,10 +36,16 @@ pub enum Check {
         absent: Vec<String>,
         allow: Vec<String>,
     },
-    /// `get:` — omitted `expect` means any 2xx; `contains` applies to the body.
-    Get {
+    /// `get:` / `post:` — embedded HTTP check. Omitted `expect` = any 2xx;
+    /// `contains` applies to the response body. `post:` adds `body:` and
+    /// `headers:` (flat string map; Content-Type defaults to application/json
+    /// when a body is present).
+    Http {
+        method: &'static str, // "GET" | "POST"
         url: String,
         name: Option<String>,
+        body: Option<String>,
+        headers: Vec<(String, String)>,
         expect: Option<u16>,
         contains: Vec<String>,
     },
@@ -59,7 +65,9 @@ impl Check {
             Check::Run { cmd, name, .. } | Check::Service { cmd, name, .. } => {
                 name.clone().unwrap_or_else(|| cmd.clone())
             }
-            Check::Get { url, name, .. } => name.clone().unwrap_or_else(|| format!("GET {url}")),
+            Check::Http {
+                method, url, name, ..
+            } => name.clone().unwrap_or_else(|| format!("{method} {url}")),
             Check::Log { path, name, .. } => name.clone().unwrap_or_else(|| path.clone()),
         }
     }
@@ -80,9 +88,23 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
 
         if map.get("get").is_some() {
             reject_unknown(map, n, &["get", "expect", "contains", "name"])?;
-            checks.push(Check::Get {
+            checks.push(Check::Http {
+                method: "GET",
                 url: req_str(map, "get", n)?,
                 name: opt_str(map, "name"),
+                body: None,
+                headers: Vec::new(),
+                expect: opt_u64(map, "expect").map(|v| v as u16),
+                contains: str_list(map, "contains"),
+            });
+        } else if map.get("post").is_some() {
+            reject_unknown(map, n, &["post", "body", "headers", "expect", "contains", "name"])?;
+            checks.push(Check::Http {
+                method: "POST",
+                url: req_str(map, "post", n)?,
+                name: opt_str(map, "name"),
+                body: opt_str(map, "body"),
+                headers: str_map(map, "headers", n)?,
                 expect: opt_u64(map, "expect").map(|v| v as u16),
                 contains: str_list(map, "contains"),
             });
@@ -134,7 +156,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 });
             }
         } else {
-            bail!("check {n} needs a 'run', 'get' or 'log' key");
+            bail!("check {n} needs a 'run', 'get', 'post' or 'log' key");
         }
     }
     Ok(checks)
@@ -164,6 +186,24 @@ fn str_list(map: &Mapping, key: &str) -> Vec<String> {
             .filter_map(|v| v.as_str().map(String::from))
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+/// A flat map of strings (e.g. `headers:`) — anything nested is rejected.
+fn str_map(map: &Mapping, key: &str, n: usize) -> Result<Vec<(String, String)>> {
+    match map.get(key) {
+        None => Ok(Vec::new()),
+        Some(Value::Mapping(m)) => {
+            let mut out = Vec::new();
+            for (k, v) in m {
+                match (k.as_str(), v.as_str()) {
+                    (Some(k), Some(v)) => out.push((k.to_string(), v.to_string())),
+                    _ => bail!("check {n}: '{key}' must be a flat map of strings"),
+                }
+            }
+            Ok(out)
+        }
+        Some(_) => bail!("check {n}: '{key}' must be a map (e.g. `headers: {{content-type: application/json}}`)"),
     }
 }
 

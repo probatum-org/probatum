@@ -18,7 +18,7 @@ One file in, one verdict out:
 flowchart LR
     Y["probatum.yaml<br/>flat checks, no logic"] --> P(["probatum run"])
     P --> R["run:<br/>a command"]
-    P --> G["get:<br/>an HTTP endpoint"]
+    P --> G["get: / post:<br/>an HTTP endpoint"]
     P --> L["log:<br/>an external log file"]
     R --> V{"verdict"}
     G --> V
@@ -52,10 +52,14 @@ A check = one **source** + flat **rules**. No logic, no nesting, no plugins.
   timeout: 15
   allow: ["migration pending"]        # known noise, ignored by the crash filter
 
-# embedded curl
+# embedded curl — reads and writes
 - get: http://127.0.0.1:8080/api/version
   expect: 200
   contains: ['"version"']
+- post: http://127.0.0.1:8080/api/posts
+  body: '{"slug": "hello", "published": true}'   # Content-Type: json by default
+  expect: 201
+  contains: ['"hello"']
 
 # embedded grep — external log file, only lines written during THIS run
 - name: app log is clean
@@ -64,11 +68,12 @@ A check = one **source** + flat **rules**. No logic, no nesting, no plugins.
   absent: ["ERROR", "panic"]
 ```
 
-Sources: `run:` (command), `run:` + `ready:`/`timeout:` (service), `get:`
-(HTTP), `log:` (external file). Rules: `expect` (HTTP status), `contains`
-(must appear), `absent` (must not appear), `allow` (exempt lines from the
-service crash filter), `name` (display label). Unknown keys are rejected —
-a typo must never silently skip a check.
+Sources: `run:` (command), `run:` + `ready:`/`timeout:` (service), `get:` /
+`post:` (HTTP — `post` adds `body:` and flat `headers:`), `log:` (external
+file). Rules: `expect` (HTTP status), `contains` (must appear), `absent`
+(must not appear), `allow` (exempt lines from the service crash filter),
+`name` (display label). Unknown keys are rejected — a typo must never
+silently skip a check.
 
 What a run looks like — probatum owns everything it starts:
 
