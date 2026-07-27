@@ -367,6 +367,10 @@ fn run_service(
     };
 
     let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    // Remember what the readiness probe last said: "not ready in Ns" alone
+    // points at the service, which may be the one thing that is not wrong
+    // (issue #2 — e.g. the URL's host resolves somewhere nothing listens).
+    let mut last_probe: Option<String> = None;
     loop {
         // Died before becoming ready — that's the interesting failure.
         if let Ok(Some(status)) = child.try_wait() {
@@ -391,8 +395,8 @@ fn run_service(
             );
         }
         if let Some(url) = ready {
-            if let Ok(resp) = crate::http::get(url, Duration::from_millis(500)) {
-                if (200..300).contains(&resp.status) {
+            match crate::http::get(url, Duration::from_millis(500)) {
+                Ok(resp) if (200..300).contains(&resp.status) => {
                     track(services, child, &logs);
                     return report(
                         check,
@@ -402,6 +406,8 @@ fn run_service(
                         None,
                     );
                 }
+                Ok(resp) => last_probe = Some(format!("HTTP {}", resp.status)),
+                Err(e) => last_probe = Some(format!("{e:#}")),
             }
         } else if started.elapsed() > Duration::from_millis(500) {
             // No readiness probe: consider started after a short grace period.
@@ -418,11 +424,14 @@ fn run_service(
             let lines = logs.snapshot();
             let cause = diagnose::from_logs(&lines);
             track(services, child, &logs); // teardown will kill the group — no orphan
+            let probe = last_probe.as_deref().unwrap_or("probe never answered");
             return report(
                 check,
                 log_file,
                 Status::Failed,
-                Some(format!("not ready in {timeout_secs}s")),
+                Some(format!(
+                    "not ready in {timeout_secs}s (last probe: {probe})"
+                )),
                 cause,
             );
         }

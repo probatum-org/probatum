@@ -3,7 +3,7 @@
 
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 pub struct Response {
@@ -36,12 +36,37 @@ pub fn request(
         format!("{hostport}:80")
     };
 
-    let stream = TcpStream::connect_timeout(
-        &addr
-            .parse()
-            .with_context(|| format!("bad address {addr}"))?,
-        timeout,
-    )?;
+    // Resolve the host (DNS included) and try every address in turn: localhost
+    // may resolve to ::1 while the service binds 127.0.0.1 (issue #2). A check
+    // is not latency-sensitive, sequential fallback is fine.
+    let addrs: Vec<SocketAddr> = addr
+        .to_socket_addrs()
+        .with_context(|| format!("cannot resolve {addr}"))?
+        .collect();
+    let mut stream = None;
+    let mut last_err: Option<std::io::Error> = None;
+    for a in &addrs {
+        match TcpStream::connect_timeout(a, timeout) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let Some(stream) = stream else {
+        bail!(
+            "nothing answered on {} ({})",
+            addrs
+                .iter()
+                .map(|a| a.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "host resolved to no addresses".into())
+        );
+    };
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     let mut stream = stream;

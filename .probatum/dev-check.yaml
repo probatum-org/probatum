@@ -8,6 +8,10 @@
   allow: ["migration pending"]
 - get: http://127.0.0.1:8087/api/version
   contains: ['"version"']
+# hostname checks must work even when localhost resolves to ::1 while the
+# service binds IPv4 (issue #2: resolve all addresses, fall back in turn)
+- name: localhost reaches an IPv4-bound service
+  get: http://localhost:8087/healthz
 - get: http://127.0.0.1:8087/api/nope
   expect: 404
 

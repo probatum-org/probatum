@@ -324,6 +324,17 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-07-27 — hostname resolution fixed (issue #2):** the reporter saw
+  localhost/::1 vs IPv4 fallback missing; the truth was worse — the client
+  only parsed numeric IPs, no DNS at all (visible as "bad address" in `get:`,
+  swallowed into a misleading "not ready in 15s" by the ready loop). Fixed
+  with std `ToSocketAddrs` + sequential fallback across all resolved
+  addresses, and the ready-timeout message now carries the last probe answer
+  ("nothing answered on ::1, 127.0.0.1 (…)"). Both of the issue's suggested
+  fixes, honestly its second one would have been insufficient alone.
+  dev-check gained a localhost-reaches-IPv4-service check. Bonus: the
+  fmt --check added after the previous miss caught this fix's own
+  formatting before push.
 - **2026-07-27 — `post:` shipped (issue #1):** first external-shaped issue: a
   write path forced a drop to `run: curl` (no status/body assertion, curl's
   "exited 22" instead of the server's answer). Shape as suggested: `post:` +
