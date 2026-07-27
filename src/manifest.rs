@@ -98,7 +98,11 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 contains: str_list(map, "contains"),
             });
         } else if map.get("post").is_some() {
-            reject_unknown(map, n, &["post", "body", "headers", "expect", "contains", "name"])?;
+            reject_unknown(
+                map,
+                n,
+                &["post", "body", "headers", "expect", "contains", "name"],
+            )?;
             checks.push(Check::Http {
                 method: "POST",
                 url: req_str(map, "post", n)?,
@@ -203,7 +207,9 @@ fn str_map(map: &Mapping, key: &str, n: usize) -> Result<Vec<(String, String)>> 
             }
             Ok(out)
         }
-        Some(_) => bail!("check {n}: '{key}' must be a map (e.g. `headers: {{content-type: application/json}}`)"),
+        Some(_) => bail!(
+            "check {n}: '{key}' must be a map (e.g. `headers: {{content-type: application/json}}`)"
+        ),
     }
 }
 

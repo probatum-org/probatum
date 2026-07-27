@@ -2,6 +2,7 @@
 #   probatum run
 - run: cargo build --offline
 - run: cargo clippy --offline -- -D warnings
+- run: cargo fmt -- --check
 
 # --help must stay a complete, self-sufficient description of the surface
 - name: --help documents the config surface
