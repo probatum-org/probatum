@@ -5,7 +5,7 @@
 [presets.probatum]
 name = "probatum"
 phase = "test"
-image = "ghcr.io/probatum-org/probatum:0.2.1"
+image = "ghcr.io/probatum-org/probatum:0.3.0"
 command = "run .probatum/selfcheck.toml"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
