@@ -67,6 +67,7 @@ allow = ["migration pending"]        # known noise, ignored by the crash filter
 get = "http://127.0.0.1:8080/api/version"
 expect = 200
 contains = ['"version"']
+max_ms = 2000                        # a correct but slower answer fails
 
 [[check]]
 post = "http://127.0.0.1:8080/api/posts"
@@ -86,9 +87,10 @@ Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
 (HTTP — `post` adds `body` and a flat `headers` table), `log` (external
 file). Rules: `expect` (HTTP status), `contains` (must appear), `absent`
 (must not appear), `timeout` (how long to wait — command deadline, request
-deadline, or readiness deadline), `background` (keep a service running with
-no probe), `allow` (exempt lines from the service crash filter), `name`
-(display label). Unknown keys are rejected, and so is a rule of the
+deadline, or readiness deadline), `max_ms` (a correct answer that arrives
+too late still fails), `background` (keep a service running with no probe),
+`allow` (exempt lines from the service crash filter), `name` (display
+label). Unknown keys are rejected, and so is a rule of the
 wrong type — a typo must never silently skip a check, and a dropped rule is a
 check that silently asserts less.
 
@@ -138,7 +140,15 @@ sequenceDiagram
   (Ctrl-C) or SIGTERM. If probatum dies, nothing it started survives. No
   zombie port between runs.
 - **Evidence** — every run writes `.probatum/runs/NNNN/`: frozen config, one
-  log per check, `run.json` (versioned `schema` field).
+  log per check, `run.json` (versioned `schema` field) with `duration_ms` for
+  every check, so a slowdown is visible even when nothing fails. probatum
+  measures and judges; it does not keep history — plotting trends is the job
+  of whatever reads `run.json`.
+- **Slow but correct is a failure, not a "couldn't run"** — `timeout` gives
+  up and never sees the answer; `max_ms` saw a correct answer and judges how
+  long it took, with the measured number as evidence. Keep budgets generous:
+  a single measurement is noisy, and a flaky red check is worse than no
+  check.
 
 Exit codes: `0` all passed · `1` at least one check failed · `2` couldn't run
 (invalid config, dirty environment, tool error).

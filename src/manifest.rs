@@ -55,6 +55,10 @@ pub enum Check {
         contains: Vec<String>,
         /// `timeout` — request deadline in seconds (default 5).
         timeout_secs: u64,
+        /// `max_ms` — the answer must arrive within N milliseconds. Distinct
+        /// from `timeout`: this one *observed* a correct answer and fails on
+        /// how long it took, with the measured number as evidence.
+        max_ms: Option<u128>,
     },
     /// `log` — evaluated from run start (offset noted before any check runs).
     /// At least one rule is required: a check without rules asserts nothing.
@@ -104,7 +108,11 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
             .ok_or_else(|| anyhow::anyhow!("check {n} must be a table (`[[check]]`)"))?;
 
         if map.contains_key("get") {
-            reject_unknown(map, n, &["get", "expect", "contains", "timeout", "name"])?;
+            reject_unknown(
+                map,
+                n,
+                &["get", "expect", "contains", "timeout", "max_ms", "name"],
+            )?;
             checks.push(Check::Http {
                 method: "GET",
                 url: req_str(map, "get", n)?,
@@ -114,13 +122,14 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
                 timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
+                max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
             });
         } else if map.contains_key("post") {
             reject_unknown(
                 map,
                 n,
                 &[
-                    "post", "body", "headers", "expect", "contains", "timeout", "name",
+                    "post", "body", "headers", "expect", "contains", "timeout", "max_ms", "name",
                 ],
             )?;
             checks.push(Check::Http {
@@ -132,6 +141,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
                 timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
+                max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
             });
         } else if map.contains_key("log") {
             reject_unknown(map, n, &["log", "contains", "absent", "name"])?;

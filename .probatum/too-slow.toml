@@ -1,0 +1,15 @@
+# Negative scenario: the endpoint answers 200 correctly, but takes ~1s. A
+# 100ms budget must fail it — that is a failure with evidence, not a
+# couldn't-run. Used inverted by the root probatum.toml (expects exit 1).
+# Margins are deliberately wide (1000ms vs 100ms): a latency check with a
+# tight budget is a flaky check, which is exactly what the tool must not be.
+[[check]]
+name = "app boots"
+run = "python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15
+
+[[check]]
+name = "slow endpoint must blow its budget"
+get = "http://127.0.0.1:8087/api/slow"
+max_ms = 100

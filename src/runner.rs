@@ -30,6 +30,10 @@ pub enum Status {
 pub struct CheckReport {
     pub label: String,
     pub status: Status,
+    /// How long the check took. Recorded for every check so a reader (or an
+    /// agent diffing two run.json files) can see something getting slower
+    /// even when nothing fails. Not a metrics system — just the number.
+    pub duration_ms: u128,
     pub detail: Option<String>,
     pub cause: Option<Cause>,
     pub log_file: String,
@@ -105,12 +109,14 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
             out.push(CheckReport {
                 label: check.label(),
                 status: Status::Skipped,
+                duration_ms: 0,
                 detail: None,
                 cause: None,
                 log_file: log_file.display().to_string(),
             });
             continue;
         }
+        let check_started = Instant::now();
         let report = match check {
             Check::Run {
                 cmd,
@@ -147,6 +153,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 expect,
                 contains,
                 timeout_secs,
+                max_ms,
                 ..
             } => run_http(
                 method,
@@ -156,6 +163,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 *expect,
                 contains,
                 *timeout_secs,
+                *max_ms,
                 &log_file,
                 check,
             ),
@@ -173,6 +181,8 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 check,
             ),
         };
+        let mut report = report;
+        report.duration_ms = check_started.elapsed().as_millis();
         if report.status == Status::Failed || report.status == Status::Errored {
             halted = true;
         }
@@ -485,6 +495,7 @@ fn run_http(
     expect: Option<u16>,
     contains: &[String],
     timeout_secs: u64,
+    max_ms: Option<u128>,
     log_file: &Path,
     check: &Check,
 ) -> CheckReport {
@@ -498,13 +509,18 @@ fn run_http(
     {
         hdrs.push(("Content-Type".into(), "application/json".into()));
     }
+    let sent = Instant::now();
     match crate::http::request(method, url, body, &hdrs, Duration::from_secs(timeout_secs)) {
         Ok(resp) => {
+            let elapsed_ms = sent.elapsed().as_millis();
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");
             let _ = std::fs::write(
                 log_file,
-                format!("{method} {url}\nHTTP {}\n\n{head}\n", resp.status),
+                format!(
+                    "{method} {url}\nHTTP {} in {elapsed_ms}ms\n\n{head}\n",
+                    resp.status
+                ),
             );
 
             let status_ok = match expect {
@@ -541,11 +557,31 @@ fn run_http(
                     }),
                 );
             }
+            // Answered, and answered correctly — but too slowly. This is a
+            // failure with positive evidence (the measured time), not a
+            // "couldn't observe": we did observe, and it was late.
+            if let Some(budget) = max_ms {
+                if elapsed_ms > budget {
+                    return report(
+                        check,
+                        log_file,
+                        Status::Failed,
+                        Some(format!("{elapsed_ms}ms (max {budget}ms)")),
+                        Some(Cause {
+                            headline: format!(
+                                "HTTP {} was correct but took {elapsed_ms}ms, over the {budget}ms budget",
+                                resp.status
+                            ),
+                            correlated: Vec::new(),
+                        }),
+                    );
+                }
+            }
             report(
                 check,
                 log_file,
                 Status::Passed,
-                Some(format!("HTTP {}", resp.status)),
+                Some(format!("HTTP {} in {elapsed_ms}ms", resp.status)),
                 None,
             )
         }
@@ -701,6 +737,7 @@ fn report(
     CheckReport {
         label: check.label(),
         status,
+        duration_ms: 0, // stamped by the caller once the check returns
         detail,
         cause,
         log_file: log_file.display().to_string(),

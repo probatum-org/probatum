@@ -20,7 +20,15 @@ pub fn print(r: &RunReport) {
                     .as_deref()
                     .map(|d| format!(" {DIM}({d}){RESET}"))
                     .unwrap_or_default();
-                println!("  {GREEN}✓{RESET} {}{extra}", c.label);
+                // Time is shown only when it is worth noticing. Every duration
+                // is in run.json regardless — this line stays a verdict, not a
+                // report.
+                let slow = if c.duration_ms >= 1000 {
+                    format!(" {DIM}{:.1}s{RESET}", c.duration_ms as f64 / 1000.0)
+                } else {
+                    String::new()
+                };
+                println!("  {GREEN}✓{RESET} {}{extra}{slow}", c.label);
             }
             Status::Errored => {
                 println!(

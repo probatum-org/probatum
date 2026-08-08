@@ -324,6 +324,30 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-08 — time as evidence (0.5.0):** the owner asked whether probatum
+  should carry metrics: "a 200 OK in 1 s and in 10 s are not the same thing —
+  it can be OK and yet something is dragging behind". Accepted in the narrow
+  form, refused in the broad one.
+  **Free part first**: `run.json` recorded *no timing at all* (the pre-pivot
+  code had `duration_ms`; the rewrite dropped it). Every check now carries
+  `duration_ms`, so an agent diffing two runs sees a slowdown with no config
+  and no new concept. The human line shows a duration only past 1 s — the
+  terminal stays a verdict, not a report.
+  **The rule**: `max_ms` on `get`/`post`. It is genuinely distinct from
+  `timeout`, and the distinction is the project's own axis: `timeout` stops
+  waiting and never observes the answer (couldn't-run); `max_ms` observed a
+  *correct* answer and fails on how long it took (failed, with the measured
+  number as evidence) — "HTTP 200 was correct but took 1000ms, over the 100ms
+  budget".
+  **Refused**: a metrics *system* — time series, baselines, cross-run
+  comparison, percentiles. That is a monitoring product; probatum says
+  pass/fail and hands off through `run.json`.
+  **Stated caveat**: one measurement is noisy (cold cache, JIT, first TCP
+  connect). Tight budgets produce flaky red, which contradicts the
+  never-a-false-failure principle — so budgets should catch gross
+  degradation, not p99 regressions, and the dogfooding checks keep a 10x
+  margin on purpose. No retries or averaging: that would be a load tester.
+  Suite: 17.
 - **2026-08-08 — install path and unified `timeout` (0.4.0):** two agreed
   items shipped. **Install**: releases had no binary attached, so probatum
   needed Rust, Docker or cidx to try — the release workflow already built the

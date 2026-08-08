@@ -14,7 +14,7 @@ run = "cargo fmt -- --check"
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "exit codes", "probatum init"]
+contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "max_ms =", "exit codes", "probatum init"]
 
 # the full demo flow (service + http + external log) must be green
 [[check]]
@@ -67,6 +67,12 @@ run = "./target/debug/probatum run .probatum/bad-rule-type.toml; test $? -eq 2"
 [[check]]
 name = "hung command is killed at its deadline"
 run = "./target/debug/probatum run .probatum/hung-command.toml; test $? -eq 1"
+timeout = 30
+
+# a correct but late answer is a failure, with the measured time as evidence
+[[check]]
+name = "over-budget latency is caught"
+run = "./target/debug/probatum run .probatum/too-slow.toml; test $? -eq 1"
 timeout = 30
 
 # a background service (no probe) is kept alive for the checks that follow

@@ -60,6 +60,9 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   expect = <code>               exact status
   contains = [".."]             body must contain
   timeout = <secs>              request deadline (default 5)
+  max_ms = <ms>                 a correct but slower answer fails, with the
+                                measured time as evidence (timeout gives up,
+                                max_ms judges what it saw)
 
   [[check]]
   post = "<url>"                HTTP POST; same rules as get, plus:

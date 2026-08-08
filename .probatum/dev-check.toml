@@ -32,6 +32,12 @@ post = "http://127.0.0.1:8087/api/events"
 body = '{"key": "k9", "value": 42}'
 contains = ['"stored": "k9"']
 
+# a correct answer that arrives in time — generous budget on purpose
+[[check]]
+name = "version endpoint answers quickly"
+get = "http://127.0.0.1:8087/api/version"
+max_ms = 2000
+
 [[check]]
 name = "the stored event is visible"
 get = "http://127.0.0.1:8087/api/version"

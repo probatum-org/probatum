@@ -52,6 +52,10 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(200, {"status": "ok"})
         elif self.path == "/api/version":
             self._reply(200, {"version": "1.3.0", "keys": len(STATE)})
+        elif self.path == "/api/slow":
+            # Correct answer, just late — the max_ms case.
+            time.sleep(1)
+            self._reply(200, {"status": "ok, eventually"})
         else:
             self._reply(404, {"error": "not found"})
 
