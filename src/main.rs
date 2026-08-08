@@ -1,6 +1,6 @@
-//! probatum — Don't trust the promise. Run the proof.
+//! probatum — test-oriented check runner.
 //!
-//! v0: `probatum run <manifest.yaml> [--json] [--seed N]`
+//! `probatum run <probatum.toml> [--json] [--seed N]`
 
 mod capture;
 mod diagnose;
@@ -26,49 +26,58 @@ fn main() {
     std::process::exit(code);
 }
 
-const USAGE: &str = "usage: probatum run [probatum.yaml|-] [--json] [--seed N] | probatum init";
-const DEFAULT_CONFIG: &str = "probatum.yaml";
+const USAGE: &str = "usage: probatum run [probatum.toml|-] [--json] [--seed N] | probatum init";
+const DEFAULT_CONFIG: &str = "probatum.toml";
 
 /// The whole product in one --help: an agent (or a human) can use probatum
 /// correctly from this text alone, no external docs needed.
-const HELP: &str = "\
-probatum — test-oriented check runner. One config, embedded checks,
+const HELP: &str = r#"probatum — test-oriented check runner. One config, embedded checks,
 only the failures that matter.
 
 usage:
-  probatum init                 write a commented example probatum.yaml
-  probatum run [file|-]         run checks (default ./probatum.yaml, - = stdin)
+  probatum init                 write a commented example probatum.toml
+  probatum run [file|-]         run checks (default ./probatum.toml, - = stdin)
       --json                    machine-readable verdict on stdout
       --seed N                  replay reference
 
-config: a flat YAML list. one check = one source + flat AND rules.
-  - run: <cmd>                  command; exit code is the authority
-    contains: [..]              output must contain (applies even on exit 0)
-    absent: [..]                output must not contain
-  - run: <cmd>                  with ready:/timeout: it becomes a service:
-    ready: <url>                started, polled until 2xx, kept alive
-    timeout: <secs>             not ready in time = failed
-    allow: [..]                 exempt known noise from the default crash
+config: a list of [[check]] tables. one check = one source + flat AND rules.
+  [[check]]
+  run = "<cmd>"                 command; exit code is the authority
+  contains = [".."]             output must contain (applies even on exit 0)
+  absent = [".."]               output must not contain
+
+  [[check]]                     with ready/timeout it becomes a service:
+  run = "<cmd>"
+  ready = "<url>"               started, polled until 2xx, kept alive
+  timeout = <secs>              not ready in time = failed
+  allow = [".."]                exempt known noise from the default crash
                                 filter (panic/traceback/FATAL/ERROR — on for
                                 services, off for plain commands)
-  - get: <url>                  HTTP GET; omitted expect = any 2xx
-    expect: <code>              exact status
-    contains: [..]              body must contain
-  - post: <url>                 HTTP POST; same rules as get, plus:
-    body: <string>              request body (Content-Type defaults to
-    headers: {k: v}             application/json when body is set)
-  - log: <path>                 external file, only lines written during THIS
-    contains: [..]              run count; at least one rule required
-    absent: [..]
-  name: <label>                 optional display name on any check
+  [[check]]
+  get = "<url>"                 HTTP GET; omitted expect = any 2xx
+  expect = <code>               exact status
+  contains = [".."]             body must contain
 
-unknown keys are errors. checks run top to bottom and stop at the first
-failure. every spawned process group is killed on every exit path — even if
-probatum crashes or is Ctrl-C'd.
+  [[check]]
+  post = "<url>"                HTTP POST; same rules as get, plus:
+  body = "<string>"             request body (Content-Type defaults to
+  headers = { k = "v" }         application/json when body is set)
+
+  [[check]]
+  log = "<path>"                external file, only lines written during THIS
+  contains = [".."]             run count; at least one rule required
+  absent = [".."]
+
+  name = "<label>"              optional display name on any check
+
+unknown keys are errors, and so is a rule of the wrong type — a dropped rule
+is a check that silently asserts less. checks run top to bottom and stop at
+the first failure. every spawned process group is killed on every exit path —
+even if probatum crashes or is Ctrl-C'd.
 
 exit codes: 0 all passed · 1 a check failed (cause on screen) · 2 couldn't
 run (invalid config, dirty environment, unobservable target — fix the env,
-don't force). evidence: .probatum/runs/NNNN/ (frozen config, logs, run.json)";
+don't force). evidence: .probatum/runs/NNNN/ (frozen config, logs, run.json)"#;
 
 fn real_main() -> Result<i32> {
     own::install_signal_handlers(); // Ctrl-C/kill must not leave orphans
@@ -107,6 +116,11 @@ fn real_main() -> Result<i32> {
     let path = match positional.get(1) {
         Some(p) => p,
         None if std::path::Path::new(DEFAULT_CONFIG).exists() => &default,
+        // A leftover probatum.yaml is the pre-0.3 format: say so instead of
+        // "no config here", which sends people looking for the wrong problem.
+        None if std::path::Path::new("probatum.yaml").exists() => bail!(
+            "found probatum.yaml, but probatum 0.3+ reads {DEFAULT_CONFIG} (TOML) — convert it: each `- run: x` becomes `[[check]]` + `run = \"x\"`"
+        ),
         None => bail!("no {DEFAULT_CONFIG} here — run `probatum init` or pass a path\n{USAGE}"),
     };
 
@@ -151,28 +165,39 @@ fn init() -> Result<i32> {
     Ok(0)
 }
 
-const EXAMPLE: &str = r#"# probatum.yaml — probatum run
-# A check = one source (run / get / log) + flat rules. Unknown keys are errors.
+const EXAMPLE: &str = r#"# probatum.toml — probatum run
+# A check = one source (run / get / post / log) + flat rules.
+# Unknown keys are errors, and so is a rule of the wrong type.
 
 # a command — passes if it exits 0
-- run: echo "replace me with cargo test / npm test / pytest"
+[[check]]
+run = "echo replace me with cargo test / npm test / pytest"
 
 # a service — start it, wait until it answers, keep it alive for later checks
-#- name: api boots
-#  run: ./myapp --port 8080
-#  ready: http://127.0.0.1:8080/healthz    # polls until 2xx
-#  timeout: 15
-#  allow: ["known noise to ignore"]        # exempt lines from the crash filter
+#[[check]]
+#name = "api boots"
+#run = "./myapp --port 8080"
+#ready = "http://127.0.0.1:8080/healthz"   # polls until 2xx
+#timeout = 15
+#allow = ["known noise to ignore"]         # exempt lines from the crash filter
 
 # an HTTP endpoint — embedded curl (omitted expect = any 2xx passes)
-#- get: http://127.0.0.1:8080/api/version
-#  expect: 200
-#  contains: ['"version"']                 # body must contain this
+#[[check]]
+#get = "http://127.0.0.1:8080/api/version"
+#expect = 200
+#contains = ['"version"']                  # body must contain this
+
+# a write path — body, optional headers
+#[[check]]
+#post = "http://127.0.0.1:8080/api/posts"
+#body = '{"slug": "hello"}'                # Content-Type: json by default
+#expect = 201
 
 # an external log file — only lines written during THIS run count
-#- log: /var/log/myapp/app.log
-#  contains: ["started"]                   # must appear
-#  absent: ["ERROR", "panic"]              # must not appear
+#[[check]]
+#log = "/var/log/myapp/app.log"
+#contains = ["started"]                    # must appear
+#absent = ["ERROR", "panic"]               # must not appear
 "#;
 
 /// Seed from /dev/urandom — recorded in the evidence so every run is replayable

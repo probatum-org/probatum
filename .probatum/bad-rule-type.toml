@@ -1,0 +1,6 @@
+# Intentionally invalid: 500 is not a string. A non-string rule must be an
+# error (exit 2) — before 0.3.0 it was silently dropped, leaving a check that
+# asserted less than it said. Used by the root probatum.toml.
+[[check]]
+log = "demo-app/data/app.log"
+absent = ["ERROR", 500]

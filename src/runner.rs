@@ -82,7 +82,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
 
     let run_dir = next_run_dir()?;
     std::fs::create_dir_all(&run_dir)?;
-    let frozen = run_dir.join("config.yaml");
+    let frozen = run_dir.join("config.toml");
     std::fs::write(&frozen, config_text).ok();
 
     // Note every log file's offset BEFORE any check runs: only lines written

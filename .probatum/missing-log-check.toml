@@ -1,0 +1,5 @@
+# Negative scenario: the watched log file never exists — that is couldn't-run
+# (exit 2), NOT a failure. Used by the root probatum.toml (expects exit 2).
+[[check]]
+log = "/nonexistent/never-written.log"
+absent = ["ERROR"]

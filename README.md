@@ -6,20 +6,20 @@ curl, the grep and the process supervision are built in; you declare the rules
 that make a check pass or fail.
 
 ```bash
-probatum init                       # drop a commented example probatum.yaml
-probatum run                        # runs ./probatum.yaml (like make & Makefile)
+probatum init                       # drop a commented example probatum.toml
+probatum run                        # runs ./probatum.toml (like make & Makefile)
 probatum run --json                 # machine verdict (agents, CI)
-cat some.yaml | probatum run -      # config from stdin — no temp file
+cat some.toml | probatum run -      # config from stdin — no temp file
 ```
 
 One file in, one verdict out:
 
 ```mermaid
 flowchart LR
-    Y["probatum.yaml<br/>flat checks, no logic"] --> P(["probatum run"])
-    P --> R["run:<br/>a command"]
-    P --> G["get: / post:<br/>an HTTP endpoint"]
-    P --> L["log:<br/>an external log file"]
+    Y["probatum.toml<br/>flat checks, no logic"] --> P(["probatum run"])
+    P --> R["run<br/>a command"]
+    P --> G["get / post<br/>an HTTP endpoint"]
+    P --> L["log<br/>an external log file"]
     R --> V{"verdict"}
     G --> V
     L --> V
@@ -28,7 +28,7 @@ flowchart LR
     V -- could not observe --> NR["⚠ exit 2<br/>couldn't run"]
 ```
 
-Convention: `probatum.yaml` at the repo root is the default config;
+Convention: `probatum.toml` at the repo root is the default config;
 `.probatum/` holds secondary check files (committed) and `.probatum/runs/`
 the evidence of each run (ignored).
 
@@ -36,44 +36,54 @@ the evidence of each run (ignored).
 
 A check = one **source** + flat **rules**. No logic, no nesting, no plugins.
 
-```yaml
+```toml
 # setup is just a check: an operation + rules (here: exit 0)
-- name: clean slate
-  run: docker compose down -v --remove-orphans
+[[check]]
+name = "clean slate"
+run = "docker compose down -v --remove-orphans"
 
 # commands — exit code is the authority
-- run: cargo test
-- run: cargo clippy -- -D warnings
+[[check]]
+run = "cargo test"
+
+[[check]]
+run = "cargo clippy -- -D warnings"
 
 # a service — start it, wait until it answers, keep it alive for what follows
-- name: api boots
-  run: ./target/debug/myapp --port 8080
-  ready: http://127.0.0.1:8080/healthz
-  timeout: 15
-  allow: ["migration pending"]        # known noise, ignored by the crash filter
+[[check]]
+name = "api boots"
+run = "./target/debug/myapp --port 8080"
+ready = "http://127.0.0.1:8080/healthz"
+timeout = 15
+allow = ["migration pending"]        # known noise, ignored by the crash filter
 
 # embedded curl — reads and writes
-- get: http://127.0.0.1:8080/api/version
-  expect: 200
-  contains: ['"version"']
-- post: http://127.0.0.1:8080/api/posts
-  body: '{"slug": "hello", "published": true}'   # Content-Type: json by default
-  expect: 201
-  contains: ['"hello"']
+[[check]]
+get = "http://127.0.0.1:8080/api/version"
+expect = 200
+contains = ['"version"']
+
+[[check]]
+post = "http://127.0.0.1:8080/api/posts"
+body = '{"slug": "hello", "published": true}'   # Content-Type: json by default
+expect = 201
+contains = ['"hello"']
 
 # embedded grep — external log file, only lines written during THIS run
-- name: app log is clean
-  log: /var/log/myapp/app.log
-  contains: ["migrations applied"]
-  absent: ["ERROR", "panic"]
+[[check]]
+name = "app log is clean"
+log = "/var/log/myapp/app.log"
+contains = ["migrations applied"]
+absent = ["ERROR", "panic"]
 ```
 
-Sources: `run:` (command), `run:` + `ready:`/`timeout:` (service), `get:` /
-`post:` (HTTP — `post` adds `body:` and flat `headers:`), `log:` (external
+Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
+(HTTP — `post` adds `body` and a flat `headers` table), `log` (external
 file). Rules: `expect` (HTTP status), `contains` (must appear), `absent`
 (must not appear), `allow` (exempt lines from the service crash filter),
-`name` (display label). Unknown keys are rejected — a typo must never
-silently skip a check.
+`name` (display label). Unknown keys are rejected, and so is a rule of the
+wrong type — a typo must never silently skip a check, and a dropped rule is a
+check that silently asserts less.
 
 What a run looks like — probatum owns everything it starts:
 
@@ -107,13 +117,13 @@ sequenceDiagram
   "couldn't observe" (`⚠`, exit 2: missing binary, unreachable URL, log file
   replaced/truncated mid-run, dirty environment). A false "failed" makes you
   chase ghosts.
-- **Log window** — `log:` files are read from their size at run start; only
+- **Log window** — `log` files are read from their size at run start; only
   new lines count. Pre-existing content is normal. Replacement or truncation
   during the run makes the window ambiguous → couldn't-run.
-- **Clean environment, detected not destroyed** — if the `ready:` URL already
+- **Clean environment, detected not destroyed** — if the `ready` URL already
   answers before the service starts, the run refuses (`environment not
   clean`). probatum never purges what it doesn't own: your cleanup is your
-  own first `- run:` check.
+  own first `run` check.
 - **Stop at first failure** — later checks are marked skipped; no cascade
   noise.
 - **Ownership** — every process starts in its own process group and the whole
@@ -133,7 +143,7 @@ pass, but the real boot replays the WAL. Break it and watch the cause surface:
 
 ```bash
 rm demo-app/data/wal/segment-0004.json
-probatum run .probatum/dev-check.yaml
+probatum run .probatum/dev-check.toml
 #   ✓ bash demo-app/tests/run.sh (test result: ok. 142 passed)
 #   ✗ app boots (crashed at startup after 0.3s)
 #       FATAL boot aborted: cannot rebuild state without segment 0004
@@ -163,10 +173,10 @@ the README):
 This repo uses probatum (test-oriented check runner).
 - Verify ANY change with `probatum run` — exit 0 = pass, 1 = a check failed
   (cause on screen), 2 = couldn't run (fix the environment, don't force).
-- Config: `probatum.yaml` at the root — flat checks (run/get/log +
-  contains/absent/expect). `probatum --help` documents the full surface.
+- Config: `probatum.toml` at the root — flat `[[check]]` tables (run/get/
+  post/log + contains/absent/expect). `probatum --help` documents the full surface.
 - Parsing results? `probatum run --json`.
-- New behavior or bugfix → add a check to probatum.yaml, not an ad-hoc script.
+- New behavior or bugfix → add a check to probatum.toml, not an ad-hoc script.
 ```
 
 **2. One-time migration** — paste this prompt to your agent in the target
@@ -177,7 +187,7 @@ Adopt probatum in this repo (run `probatum --help` first — it documents the
 whole config surface):
 1. Run `probatum init`.
 2. Migrate the VERIFICATION targets from the Makefile/Taskfile/scripts into
-   probatum.yaml: smoke tests, service boot + healthchecks, HTTP checks,
+   probatum.toml: smoke tests, service boot + healthchecks, HTTP checks,
    log greps. Leave build/deploy targets where they are.
 3. Add the probatum Verification section to this repo's CLAUDE.md.
 4. Prove it before finishing: `probatum run` must pass green, AND
@@ -189,7 +199,7 @@ whole config surface):
 ```bash
 cargo build --release --target x86_64-unknown-linux-musl   # static binary, ~1 MB, runs on any Linux
 docker build -t probatum .                                  # alpine + binary, ~14 MB
-cat some.yaml | docker run -i --rm probatum run -           # containerized run
+cat some.toml | docker run -i --rm probatum run -           # containerized run
 ```
 
 The image ships probatum and a busybox shell only — project toolchains

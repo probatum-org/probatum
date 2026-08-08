@@ -1,6 +1,6 @@
 # probatum
 
-Test-oriented check runner: one `probatum.yaml`, embedded checks (run/get/log),
+Test-oriented check runner: one `probatum.toml`, embedded checks (run/get/post/log),
 only the failures that matter. Rust, ~1k lines, offline-buildable.
 
 ## Dogfooding — the rule of this repo
@@ -11,12 +11,12 @@ only the failures that matter. Rust, ~1k lines, offline-buildable.
 cargo build --offline && ./target/debug/probatum run
 ```
 
-The root `probatum.yaml` builds, lints (clippy -D warnings), runs the demo
+The root `probatum.toml` builds, lints (clippy -D warnings), runs the demo
 end-to-end (service + HTTP + external log) and asserts the negative scenarios
 are *caught* (exit 1 exactly).
 
 - Fixed a bug or added behavior? **Add a check that would have caught it** to
-  `probatum.yaml` or `.probatum/*.yaml` — not an ad-hoc test script. Negative
+  `probatum.toml` or `.probatum/*.toml` — not an ad-hoc test script. Negative
   scenarios live as env switches on `demo-app/app.py` (`WAL_DIR`, `DEGRADE`,
   `LOG_FILE`, `HANG`) + an inverted check (`...; test $? -eq 1` for caught
   failures, `-eq 2` for couldn't-run refusals, `-eq 101` + port probe for

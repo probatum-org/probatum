@@ -1,4 +1,4 @@
-# Project override: the stock probatum preset runs ./probatum.yaml, which in
+# Project override: the stock probatum preset runs ./probatum.toml, which in
 # THIS repo needs the host toolchain (cargo, python3) — that suite runs
 # natively in .github/workflows/ci.yml. In-container we run the image
 # selfcheck instead: it proves the shipped image can run checks at all.
@@ -6,7 +6,7 @@
 name = "probatum"
 phase = "test"
 image = "ghcr.io/probatum-org/probatum:0.2.1"
-command = "run .probatum/selfcheck.yaml"
+command = "run .probatum/selfcheck.toml"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
 # (rustfmt override removed: fixed upstream in cidx 2.1.0 — cidx-org/cidx#163.

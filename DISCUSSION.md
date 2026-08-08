@@ -173,7 +173,7 @@ project's real test context rather than an implicit probatum container.
 
 probatum belongs in cidx's `test` phase. The outer loop is `cidx run test` or
 `cidx run ci`; the inner developer/agent loop calls `probatum run` directly.
-Both use the repository's `probatum.yaml` as the verification source of truth.
+Both use the repository's `probatum.toml` as the verification source of truth.
 
 The public project is packaged as a static musl binary and a small Alpine-based
 GHCR image. Alpine is intentional: `run:` currently needs `/bin/sh`. The image
@@ -192,7 +192,7 @@ Or, from probatum's point of view:
 
 Implemented and dogfooded:
 
-- default `probatum.yaml`, stdin configs and `probatum init`;
+- default `probatum.toml`, stdin configs and `probatum init`;
 - strict flat parsing for `run`, service, `get` and `log`;
 - source-specific defaults and `failed` versus `couldn't-run`;
 - timestamped stdout/stderr capture and concise deterministic diagnosis;
@@ -324,6 +324,27 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-08 — config format: YAML → TOML (0.3.0, breaking):** the owner
+  questioned the original YAML choice. Investigated rather than opined; two
+  arguments survived and one folk argument died. **Dead**: the "Norway
+  problem" — serde_yaml follows YAML 1.2, so `ON`/`NO`/`OFF` stay strings
+  (tested, the rule was kept). **Real**: (1) `serde_yaml` is literally
+  `0.9.34+deprecated` — an unmaintained crate at the core of parsing;
+  (2) unquoted `: ` breaks the parse, and it bit twice in one session
+  including a shipped `probatum init` example — the pattern is frequent in
+  real commands (`git commit -m "fix: x"`, `curl -H "Accept: application/
+  json"`), which contradicts the "written correctly first try, without docs"
+  compass. Plus TOML matches the owner's ecosystem (cidx.toml, Cargo.toml).
+  Migrated now because the blast radius is the owner's own repos — the
+  cheapest this will ever be. Rejected: supporting both formats (two parsers,
+  two error vocabularies, "which do I write?").
+  A **genuine bug** surfaced during the investigation and was fixed with the
+  migration: `str_list` silently discarded non-string entries, so
+  `absent = ["ERROR", 500]` dropped a rule and the check asserted less than
+  it said — the same silent-skip class the project forbids for unknown keys.
+  Wrong-typed rules are now errors; a dogfooding check locks it. `expect` and
+  `timeout` are strictly typed too. A leftover `probatum.yaml` produces a
+  migration hint instead of "no config here". Suite: 14 checks.
 - **2026-08-08 — cidx 3.1.0, drift class closed:** the whole local/CI drift
   family that started at #163 is dead. `go.mod` now declares `/v3`, so
   `go install …/v3/cmd/cidx@v3.1.0` works; `generate` writes that exact
