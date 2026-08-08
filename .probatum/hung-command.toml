@@ -1,0 +1,7 @@
+# Negative scenario: a command that never returns must be killed at its
+# deadline and reported as failed — not block the run forever. Used inverted
+# by the root probatum.toml (expects exit 1).
+[[check]]
+name = "hung command"
+run = "echo working; sleep 300"
+timeout = 2

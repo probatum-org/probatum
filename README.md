@@ -6,6 +6,10 @@ curl, the grep and the process supervision are built in; you declare the rules
 that make a check pass or fail.
 
 ```bash
+# install (Linux x86_64, no toolchain needed)
+curl -sSfL https://github.com/probatum-org/probatum/releases/latest/download/probatum-x86_64-linux \
+  -o ~/.local/bin/probatum && chmod +x ~/.local/bin/probatum
+
 probatum init                       # drop a commented example probatum.toml
 probatum run                        # runs ./probatum.toml (like make & Makefile)
 probatum run --json                 # machine verdict (agents, CI)
@@ -45,6 +49,7 @@ run = "docker compose down -v --remove-orphans"
 # commands — exit code is the authority
 [[check]]
 run = "cargo test"
+timeout = 600                        # kill it after N seconds and fail
 
 [[check]]
 run = "cargo clippy -- -D warnings"
@@ -80,8 +85,10 @@ absent = ["ERROR", "panic"]
 Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
 (HTTP — `post` adds `body` and a flat `headers` table), `log` (external
 file). Rules: `expect` (HTTP status), `contains` (must appear), `absent`
-(must not appear), `allow` (exempt lines from the service crash filter),
-`name` (display label). Unknown keys are rejected, and so is a rule of the
+(must not appear), `timeout` (how long to wait — command deadline, request
+deadline, or readiness deadline), `background` (keep a service running with
+no probe), `allow` (exempt lines from the service crash filter), `name`
+(display label). Unknown keys are rejected, and so is a rule of the
 wrong type — a typo must never silently skip a check, and a dropped rule is a
 check that silently asserts less.
 

@@ -45,10 +45,12 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   run = "<cmd>"                 command; exit code is the authority
   contains = [".."]             output must contain (applies even on exit 0)
   absent = [".."]               output must not contain
+  timeout = <secs>              kill it after N seconds and fail
 
-  [[check]]                     with ready/timeout it becomes a service:
+  [[check]]                     with ready or background it is a service:
   run = "<cmd>"
   ready = "<url>"               started, polled until 2xx, kept alive
+  background = true             kept alive with no probe (ready omitted)
   timeout = <secs>              not ready in time = failed
   allow = [".."]                exempt known noise from the default crash
                                 filter (panic/traceback/FATAL/ERROR — on for
@@ -57,6 +59,7 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   get = "<url>"                 HTTP GET; omitted expect = any 2xx
   expect = <code>               exact status
   contains = [".."]             body must contain
+  timeout = <secs>              request deadline (default 5)
 
   [[check]]
   post = "<url>"                HTTP POST; same rules as get, plus:
@@ -70,9 +73,10 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
 
   name = "<label>"              optional display name on any check
 
-unknown keys are errors, and so is a rule of the wrong type — a dropped rule
-is a check that silently asserts less. checks run top to bottom and stop at
-the first failure. every spawned process group is killed on every exit path —
+`timeout` means one thing everywhere: how long probatum waits before calling
+it a failure. unknown keys are errors, and so is a rule of the wrong type — a
+dropped rule is a check that silently asserts less. checks run top to bottom
+and stop at the first failure. every spawned process group is killed on every exit path —
 even if probatum crashes or is Ctrl-C'd.
 
 exit codes: 0 all passed · 1 a check failed (cause on screen) · 2 couldn't
@@ -172,6 +176,7 @@ const EXAMPLE: &str = r#"# probatum.toml — probatum run
 # a command — passes if it exits 0
 [[check]]
 run = "echo replace me with cargo test / npm test / pytest"
+#timeout = 300                             # kill it after N seconds and fail
 
 # a service — start it, wait until it answers, keep it alive for later checks
 #[[check]]

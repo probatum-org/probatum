@@ -1,0 +1,12 @@
+# A service with no readiness probe: `background = true` says "keep it
+# running", where before 0.4.0 that was inferred from an unrelated `timeout`.
+# The HTTP check that follows proves it really stayed up.
+[[check]]
+name = "app starts in the background"
+run = "python3 demo-app/app.py"
+background = true
+
+[[check]]
+name = "it is actually serving"
+get = "http://127.0.0.1:8087/healthz"
+timeout = 10

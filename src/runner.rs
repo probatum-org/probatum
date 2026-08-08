@@ -116,8 +116,9 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 cmd,
                 contains,
                 absent,
+                timeout_secs,
                 ..
-            } => run_cmd(cmd, contains, absent, &log_file, check),
+            } => run_cmd(cmd, contains, absent, *timeout_secs, &log_file, check),
             Check::Service {
                 cmd,
                 ready,
@@ -145,6 +146,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 headers,
                 expect,
                 contains,
+                timeout_secs,
                 ..
             } => run_http(
                 method,
@@ -153,6 +155,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 headers,
                 *expect,
                 contains,
+                *timeout_secs,
                 &log_file,
                 check,
             ),
@@ -244,6 +247,7 @@ fn run_cmd(
     cmd: &str,
     contains: &[String],
     absent: &[String],
+    timeout_secs: Option<u64>,
     log_file: &Path,
     check: &Check,
 ) -> CheckReport {
@@ -264,7 +268,40 @@ fn run_cmd(
     };
     crate::own::register(child.id());
     let (logs, handles) = capture::attach(&mut child, log_file.to_path_buf(), started);
-    let status = child.wait();
+
+    let status = match timeout_secs {
+        None => child.wait(),
+        Some(secs) => {
+            let deadline = Instant::now() + Duration::from_secs(secs);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(s)) => break Ok(s),
+                    Err(e) => break Err(e),
+                    Ok(None) => {}
+                }
+                if Instant::now() > deadline {
+                    // Kill the whole group: a hung command may have children.
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
+                    let _ = child.wait();
+                    std::thread::sleep(Duration::from_millis(120)); // let capture drain
+                    let lines = logs.snapshot();
+                    return report(
+                        check,
+                        log_file,
+                        Status::Failed,
+                        Some(format!("timed out after {secs}s")),
+                        Some(Cause {
+                            headline: format!("still running after {secs}s — killed"),
+                            correlated: diagnose::tail(&lines, 5),
+                        }),
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    };
     for h in handles {
         let _ = h.join();
     }
@@ -447,6 +484,7 @@ fn run_http(
     headers: &[(String, String)],
     expect: Option<u16>,
     contains: &[String],
+    timeout_secs: u64,
     log_file: &Path,
     check: &Check,
 ) -> CheckReport {
@@ -460,7 +498,7 @@ fn run_http(
     {
         hdrs.push(("Content-Type".into(), "application/json".into()));
     }
-    match crate::http::request(method, url, body, &hdrs, Duration::from_secs(5)) {
+    match crate::http::request(method, url, body, &hdrs, Duration::from_secs(timeout_secs)) {
         Ok(resp) => {
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");

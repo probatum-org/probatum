@@ -26,6 +26,9 @@ pub enum Check {
         name: Option<String>,
         contains: Vec<String>,
         absent: Vec<String>,
+        /// `timeout` — kill the command after N seconds and fail. None = wait
+        /// forever (a hung command would otherwise block the whole run).
+        timeout_secs: Option<u64>,
     },
     /// `run` + `ready`/`timeout` — there is no exit code to trust while it
     /// runs, so the default crash filter applies to its logs; `allow` exempts.
@@ -50,6 +53,8 @@ pub enum Check {
         headers: Vec<(String, String)>,
         expect: Option<u16>,
         contains: Vec<String>,
+        /// `timeout` — request deadline in seconds (default 5).
+        timeout_secs: u64,
     },
     /// `log` — evaluated from run start (offset noted before any check runs).
     /// At least one rule is required: a check without rules asserts nothing.
@@ -99,7 +104,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
             .ok_or_else(|| anyhow::anyhow!("check {n} must be a table (`[[check]]`)"))?;
 
         if map.contains_key("get") {
-            reject_unknown(map, n, &["get", "expect", "contains", "name"])?;
+            reject_unknown(map, n, &["get", "expect", "contains", "timeout", "name"])?;
             checks.push(Check::Http {
                 method: "GET",
                 url: req_str(map, "get", n)?,
@@ -108,12 +113,15 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 headers: Vec::new(),
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
+                timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
             });
         } else if map.contains_key("post") {
             reject_unknown(
                 map,
                 n,
-                &["post", "body", "headers", "expect", "contains", "name"],
+                &[
+                    "post", "body", "headers", "expect", "contains", "timeout", "name",
+                ],
             )?;
             checks.push(Check::Http {
                 method: "POST",
@@ -123,6 +131,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 headers: str_map(map, "headers", n)?,
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
+                timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
             });
         } else if map.contains_key("log") {
             reject_unknown(map, n, &["log", "contains", "absent", "name"])?;
@@ -142,7 +151,14 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 map,
                 n,
                 &[
-                    "run", "ready", "timeout", "contains", "absent", "allow", "name",
+                    "run",
+                    "ready",
+                    "background",
+                    "timeout",
+                    "contains",
+                    "absent",
+                    "allow",
+                    "name",
                 ],
             )?;
             let cmd = req_str(map, "run", n)?;
@@ -150,7 +166,10 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
             let contains = str_list(map, "contains", n)?;
             let absent = str_list(map, "absent", n)?;
             let allow = str_list(map, "allow", n)?;
-            if map.contains_key("ready") || map.contains_key("timeout") {
+            // A service is declared, never inferred from an unrelated key:
+            // `ready` (probe it) or `background` (just keep it running). That
+            // frees `timeout` to mean one thing everywhere — how long we wait.
+            if map.contains_key("ready") || opt_bool(map, "background", n)?.unwrap_or(false) {
                 checks.push(Check::Service {
                     cmd,
                     name,
@@ -162,13 +181,14 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 });
             } else {
                 if !allow.is_empty() {
-                    bail!("check {n}: 'allow' only applies to a service (add ready/timeout) — a plain run has no default filter to exempt");
+                    bail!("check {n}: 'allow' only applies to a service (add ready or background) — a plain run has no default filter to exempt");
                 }
                 checks.push(Check::Run {
                     cmd,
                     name,
                     contains,
                     absent,
+                    timeout_secs: opt_u64(map, "timeout", n)?,
                 });
             }
         } else {
@@ -191,6 +211,17 @@ fn opt_str(map: &Table, key: &str, n: usize) -> Result<Option<String>> {
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(v) => bail!(
             "check {n}: '{key}' must be a string, found {}",
+            v.type_str()
+        ),
+    }
+}
+
+fn opt_bool(map: &Table, key: &str, n: usize) -> Result<Option<bool>> {
+    match map.get(key) {
+        None => Ok(None),
+        Some(Value::Boolean(b)) => Ok(Some(*b)),
+        Some(v) => bail!(
+            "check {n}: '{key}' must be true or false, found {}",
             v.type_str()
         ),
     }

@@ -324,6 +324,24 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-08 — install path and unified `timeout` (0.4.0):** two agreed
+  items shipped. **Install**: releases had no binary attached, so probatum
+  needed Rust, Docker or cidx to try — the release workflow already built the
+  musl binary and threw it away. It is now uploaded as
+  `probatum-x86_64-linux`, and the README leads with a `curl` one-liner.
+  **`timeout` now means one thing everywhere** — how long probatum waits
+  before calling it a failure: a command deadline on `run` (a hung
+  `cargo test` used to block until the CI's own limit), a request deadline on
+  `get`/`post` (was hardcoded at 5 s), and the readiness deadline on a
+  service (unchanged). That required naming the service trigger explicitly:
+  it used to be inferred from the presence of `ready` **or** `timeout`, so
+  `timeout` could not also mean a deadline. A service is now declared with
+  `ready` (probe it) or the new `background = true` (keep it running, no
+  probe) — the capability is preserved and the intent is written down instead
+  of inferred from an unrelated key. A read timeout also reports "no answer
+  within Ns" rather than leaking `Resource temporarily unavailable (os error
+  11)`. Two dogfooding checks lock it (hung command killed at its deadline,
+  background service still serving for a later check); suite: 16.
 - **2026-08-08 — config format: YAML → TOML (0.3.0, breaking):** the owner
   questioned the original YAML choice. Investigated rather than opined; two
   arguments survived and one folk argument died. **Dead**: the "Norway

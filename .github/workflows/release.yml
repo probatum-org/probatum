@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write # attach the binary to the release
   packages: write
 
 jobs:
@@ -28,3 +28,13 @@ jobs:
           docker build -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
           docker push "$IMAGE:$VERSION"
           docker push "$IMAGE:latest"
+      # Without this, installing probatum needs Rust, Docker or cidx.
+      # Works whichever order the release and the tag are created in.
+      - name: attach the static binary to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp target/x86_64-unknown-linux-musl/release/probatum probatum-x86_64-linux
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            && gh release upload "$GITHUB_REF_NAME" probatum-x86_64-linux --clobber \
+            || gh release create "$GITHUB_REF_NAME" probatum-x86_64-linux --generate-notes

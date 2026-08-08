@@ -85,7 +85,18 @@ pub fn request(
     )?;
 
     let mut raw = String::new();
-    stream.read_to_string(&mut raw)?;
+    // A read timeout surfaces as WouldBlock/TimedOut — name OUR deadline
+    // instead of leaking "Resource temporarily unavailable (os error 11)".
+    stream.read_to_string(&mut raw).map_err(|e| {
+        if matches!(
+            e.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ) {
+            anyhow::anyhow!("no answer within {}s", timeout.as_secs())
+        } else {
+            anyhow::Error::from(e)
+        }
+    })?;
 
     let mut parts = raw.splitn(2, "\r\n\r\n");
     let head = parts.next().unwrap_or_default();
