@@ -9,9 +9,9 @@ image = "ghcr.io/probatum-org/probatum:0.2.1"
 command = "run .probatum/selfcheck.yaml"
 workdir = "/work"
 volumes = ["${WORKSPACE}:/work"]
-# (rustfmt override removed: fixed upstream in cidx 2.1.0 — cidx-org/cidx#163;
-# the CI bootstrap is pinned to the 2.1.0 commit until cidx-org/cidx#187 makes
-# v2 tags reachable by `go install`.)
+# (rustfmt override removed: fixed upstream in cidx 2.1.0 — cidx-org/cidx#163.
+# The CI bootstrap needs no manual pin since cidx 3.1.0: `generate` writes the
+# /v3 module path pinned to the exact generating version — cidx-org/cidx#395.)
 
 # (cargo-audit override removed: fixed upstream in cidx 3.0.0 — extracts to
 # /tmp and runs as non-root; cidx-org/cidx#188.)

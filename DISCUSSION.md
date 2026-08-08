@@ -324,6 +324,15 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-08 — cidx 3.1.0, drift class closed:** the whole local/CI drift
+  family that started at #163 is dead. `go.mod` now declares `/v3`, so
+  `go install …/v3/cmd/cidx@v3.1.0` works; `generate` writes that exact
+  pinned version instead of `@latest`; and cidx gained the systemic guard
+  suggested in #395 (`pkg/actions/module_major.go` refuses to tag a major the
+  module path does not declare — the next major cannot repeat this). probatum
+  dropped its last two workarounds: the manual bootstrap pin and, at 3.0.0,
+  the cargo-audit override. Full pipeline green in 14 s with zero project
+  overrides on stock presets.
 - **2026-07-27 — hostname resolution fixed (issue #2):** the reporter saw
   localhost/::1 vs IPv4 fallback missing; the truth was worse — the client
   only parsed numeric IPs, no DNS at all (visible as "bad address" in `get:`,

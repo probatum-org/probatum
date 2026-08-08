@@ -30,8 +30,7 @@ jobs:
       - name: Install CIDX
         run: |
           mkdir -p bin
-          # pinned to the v3.0.0 commit: the /v2 module path makes v3 tags unreachable and @latest resolves to v2.4.0 (cidx-org/cidx#187 recurrence)
-          go install github.com/cidx-org/cidx/v2/cmd/cidx@aff6625
+          go install github.com/cidx-org/cidx/v3/cmd/cidx@v3.1.0
           cp "$(go env GOPATH)/bin/cidx" bin/cidx
       - uses: actions/upload-artifact@v7
         with:
