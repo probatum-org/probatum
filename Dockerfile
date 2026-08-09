@@ -8,7 +8,10 @@
 # (busybox). Project toolchains (cargo, python…) are NOT shipped here — in a
 # real pipeline the workspace's own tooling image runs those; this image only
 # carries probatum itself (get:/log:/sh checks).
-FROM alpine:3.20
+# alpine 3.24 is supported until 2028-06-01. Check before bumping:
+#   curl -sL -H 'Accept: application/json' https://endoflife.date/api/v1/products/alpine-linux
+# (3.20 went EOL on 2026-04-01 and shipped here for four months past it.)
+FROM alpine:3.24
 COPY target/x86_64-unknown-linux-musl/release/probatum /usr/local/bin/probatum
 WORKDIR /work
 ENTRYPOINT ["probatum"]
