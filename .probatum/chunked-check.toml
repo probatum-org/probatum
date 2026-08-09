@@ -1,0 +1,13 @@
+# A chunked response whose body really does contain "version", split across
+# two chunks. Before 0.6.0 probatum searched the raw framing and reported a
+# false failure. This must pass.
+[[check]]
+name = "chunked fixture is up"
+run = "python3 demo-app/tests/chunked_server.py 8094"
+background = true
+
+[[check]]
+name = "contains works across a chunk boundary"
+get = "http://127.0.0.1:8094/api/version"
+contains = ['"version"']
+timeout = 10

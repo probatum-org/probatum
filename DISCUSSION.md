@@ -324,6 +324,43 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-09 — external audit: accepted, reordered, partly refused (0.6.0):**
+  the owner commissioned an audit from another model. It is accurate — every
+  factual claim was verified true (zero `cargo test` tests, 64-PID registry
+  with silent overflow, groups never deregistered, SIGTERM exiting 130,
+  unbounded in-memory capture, an `expect()` that panics on an unwritable
+  evidence file, `max+1` run numbering, no chunked support). **Its ordering
+  was wrong**: it opened on test infrastructure and buried at §7 the only
+  item that produces a *false failure* in a real repo.
+  **Proven first, then fixed**: a chunked response whose body straddles a
+  chunk boundary made `contains` miss a string that was really there — the
+  false "failed" the project exists to prevent — and the evidence file stored
+  the chunk framing as if it were the body. Node, Go and nginx proxies answer
+  chunked whenever the length is unknown up front, so this was waiting in the
+  next real repo. Now decoded (~25 lines), with a fixture and a check.
+  **Also fixed** (one correctness pass): SIGTERM reports 143 and SIGINT 130
+  (128+signal, what every shell and orchestrator reads); process groups are
+  deregistered once reaped, so a recycled PID can never be swept later;
+  capture is capped in memory (the evidence file stays complete) so a chatty
+  service cannot take the runner down; the evidence-file `expect()` no longer
+  panics — capture degrades to memory; run directories are reserved with an
+  atomic `create_dir` + step-over, verified with 20 concurrent runs.
+  **Accepted in a narrower form**: unit tests. probatum being its own test
+  suite is the design, and 21 end-to-end checks through the real binary are
+  stronger evidence than unit tests for an observation tool. But parser cases
+  are pure-function cases: each one currently costs a process and a committed
+  config file (three such files exist only to be rejected). 11 targeted tests
+  now pin the config *language*; they found a misleading message on their
+  first run (`check = []` said "must be a list" of a thing that was a list).
+  No coverage chase.
+  **Deferred**: total `--json` (one document for every outcome, including an
+  invalid config) — real for agents, already an open item, but a `main.rs`
+  restructure worth doing on its own.
+  **Refused**: splitting `runner.rs` into pure functions for testability
+  (no forcing need; it works and is covered end-to-end — refactor when
+  something demands it), and a chaos-fixture framework (the mock already has
+  four env switches and there are nine negative configs; new fixtures get
+  added when a bug motivates them).
 - **2026-08-08 — time as evidence (0.5.0):** the owner asked whether probatum
   should carry metrics: "a 200 OK in 1 s and in 10 s are not the same thing —
   it can be OK and yet something is dragging behind". Accepted in the narrow

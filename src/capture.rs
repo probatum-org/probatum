@@ -21,12 +21,20 @@ pub struct CapturedLogs {
     lines: Arc<Mutex<Vec<LogLine>>>,
 }
 
+/// A chatty (or hostile) service must not take probatum down with it. The
+/// evidence file keeps everything; memory keeps the earliest lines, which is
+/// what diagnosis needs — the first panic/error marker wins.
+const MAX_LINES_IN_MEMORY: usize = 100_000;
+
 impl CapturedLogs {
     pub fn snapshot(&self) -> Vec<LogLine> {
         self.lines.lock().unwrap().clone()
     }
     fn push(&self, line: LogLine) {
-        self.lines.lock().unwrap().push(line);
+        let mut lines = self.lines.lock().unwrap();
+        if lines.len() < MAX_LINES_IN_MEMORY {
+            lines.push(line);
+        }
     }
 }
 
@@ -37,9 +45,10 @@ pub fn attach(
     started: Instant,
 ) -> (CapturedLogs, Vec<JoinHandle<()>>) {
     let logs = CapturedLogs::default();
-    let file = Arc::new(Mutex::new(
-        std::fs::File::create(&evidence_file).expect("create evidence log file"),
-    ));
+    // An unwritable evidence dir must not panic the runner: capture keeps
+    // working in memory, and the caller is told the file does not exist
+    // rather than being handed a path that was never written.
+    let file = Arc::new(Mutex::new(std::fs::File::create(&evidence_file).ok()));
     let mut handles = Vec::new();
 
     if let Some(out) = child.stdout.take() {
@@ -67,7 +76,7 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
     reader: R,
     source: &'static str,
     logs: CapturedLogs,
-    file: Arc<Mutex<std::fs::File>>,
+    file: Arc<Mutex<Option<std::fs::File>>>,
     started: Instant,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
@@ -76,7 +85,9 @@ fn spawn_reader<R: std::io::Read + Send + 'static>(
             let Ok(text) = line else { break };
             let at_ms = started.elapsed().as_millis();
             if let Ok(mut f) = file.lock() {
-                let _ = writeln!(f, "[{at_ms:>8}ms {source}] {text}");
+                if let Some(f) = f.as_mut() {
+                    let _ = writeln!(f, "[{at_ms:>8}ms {source}] {text}");
+                }
             }
             logs.push(LogLine {
                 at_ms,

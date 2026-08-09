@@ -100,7 +100,7 @@ pub fn request(
 
     let mut parts = raw.splitn(2, "\r\n\r\n");
     let head = parts.next().unwrap_or_default();
-    let body = parts.next().unwrap_or_default().to_string();
+    let raw_body = parts.next().unwrap_or_default();
     let status_line = head.lines().next().unwrap_or_default();
     let status: u16 = status_line
         .split_whitespace()
@@ -110,5 +110,41 @@ pub fn request(
     if status == 0 {
         bail!("malformed HTTP response: {status_line}");
     }
+
+    // Servers that don't know the length up front answer chunked (Node, Go,
+    // nginx proxies…). Undecoded, the chunk sizes sit inside the body and a
+    // `contains` rule can miss a string that is really there — a false
+    // failure, which is the one thing this tool must never produce.
+    let chunked = head
+        .lines()
+        .any(|l| l.to_ascii_lowercase().starts_with("transfer-encoding:") && l.contains("chunked"));
+    let body = if chunked {
+        dechunk(raw_body)?
+    } else {
+        raw_body.to_string()
+    };
     Ok(Response { status, body })
+}
+
+/// Reassemble a chunked body: <hex size>CRLF<data>CRLF … 0CRLF.
+fn dechunk(raw: &str) -> Result<String> {
+    let mut out = String::new();
+    let mut rest = raw;
+    loop {
+        let (size_line, after) = rest
+            .split_once("\r\n")
+            .context("truncated chunked response: no chunk size")?;
+        // A chunk size may carry extensions after ';'.
+        let size_hex = size_line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size_hex, 16)
+            .with_context(|| format!("bad chunk size {size_hex:?}"))?;
+        if size == 0 {
+            return Ok(out);
+        }
+        if after.len() < size {
+            bail!("truncated chunked response: chunk shorter than its declared size");
+        }
+        out.push_str(&after[..size]);
+        rest = after[size..].strip_prefix("\r\n").unwrap_or(&after[size..]);
+    }
 }

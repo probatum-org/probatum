@@ -85,7 +85,6 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
     let _own_guard = crate::own::Guard;
 
     let run_dir = next_run_dir()?;
-    std::fs::create_dir_all(&run_dir)?;
     let frozen = run_dir.join("config.toml");
     std::fs::write(&frozen, config_text).ok();
 
@@ -214,12 +213,13 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
 
     // Teardown: kill every process group we started. The runner owns what it launches.
     for mut svc in services {
-        let pid = svc.child.id() as i32;
+        let pid = svc.child.id();
         unsafe {
-            libc::kill(-pid, libc::SIGKILL); // negative pid = the whole process group
+            libc::kill(-(pid as i32), libc::SIGKILL); // negative pid = the whole process group
         }
         let _ = svc.child.kill();
         let _ = svc.child.wait();
+        crate::own::unregister(pid); // reaped: free the slot before a PID can be recycled
     }
 
     let failed = out.iter().filter(|c| c.status == Status::Failed).count();
@@ -315,6 +315,7 @@ fn run_cmd(
     for h in handles {
         let _ = h.join();
     }
+    crate::own::unregister(child.id()); // reaped: free the slot
     let lines = logs.snapshot();
 
     match status {
@@ -756,16 +757,29 @@ fn fmt_status(s: &std::process::ExitStatus) -> String {
     }
 }
 
+/// Reserve the next run directory by creating it — `create_dir` fails if it
+/// already exists, so two probatum processes racing in the same repo cannot
+/// land on the same number and overwrite each other's evidence.
 fn next_run_dir() -> Result<PathBuf> {
     let base = PathBuf::from(".probatum/runs");
     std::fs::create_dir_all(&base).context("create .probatum/runs")?;
-    let mut max = 0u32;
+    let mut next = 1u32;
     for entry in std::fs::read_dir(&base)? {
         if let Ok(name) = entry.map(|e| e.file_name().to_string_lossy().into_owned()) {
             if let Ok(n) = name.parse::<u32>() {
-                max = max.max(n);
+                next = next.max(n + 1);
             }
         }
     }
-    Ok(base.join(format!("{:04}", max + 1)))
+    // Someone may take the number between our scan and our create: step over
+    // whoever won and try the next one.
+    for candidate in next..next.saturating_add(1000) {
+        let dir = base.join(format!("{candidate:04}"));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).context("create run directory"),
+        }
+    }
+    anyhow::bail!("cannot reserve a run directory under {}", base.display())
 }

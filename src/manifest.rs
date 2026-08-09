@@ -96,8 +96,11 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
     }
     let items = match doc.get("check") {
         Some(Value::Array(a)) if !a.is_empty() => a,
+        // An empty list is not a malformed list: say what is actually wrong.
+        Some(Value::Array(_)) | None => {
+            bail!("config has no checks — a config is a list of [[check]] entries")
+        }
         Some(_) => bail!("'check' must be a list of [[check]] entries"),
-        None => bail!("config has no checks — a config is a list of [[check]] entries"),
     };
 
     let mut checks = Vec::new();
@@ -307,4 +310,162 @@ fn reject_unknown(map: &Table, n: usize, known: &[&str]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The config language is a contract; these pin it down. Behaviour lives
+    /// in the dogfooding suite (probatum.toml) — this is only the parser,
+    /// where an end-to-end test would cost a process and a committed file per
+    /// case.
+    fn err(text: &str) -> String {
+        parse(text).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn each_source_parses() {
+        let checks = parse(
+            r#"
+            [[check]]
+            run = "cargo test"
+            [[check]]
+            run = "./app"
+            ready = "http://x/health"
+            [[check]]
+            get = "http://x/v"
+            [[check]]
+            post = "http://x/v"
+            body = "{}"
+            [[check]]
+            log = "/var/log/a.log"
+            absent = ["ERROR"]
+        "#,
+        )
+        .unwrap();
+        assert_eq!(checks.len(), 5);
+        assert!(matches!(checks[0], Check::Run { .. }));
+        assert!(matches!(checks[1], Check::Service { .. }));
+        assert!(matches!(checks[2], Check::Http { method: "GET", .. }));
+        assert!(matches!(checks[3], Check::Http { method: "POST", .. }));
+        assert!(matches!(checks[4], Check::Log { .. }));
+    }
+
+    #[test]
+    fn timeout_alone_is_a_deadline_not_a_service() {
+        // Before 0.4.0 `timeout` also meant "this is a service", which is why
+        // it could not mean "deadline". A service is declared now.
+        let checks = parse("[[check]]\nrun = \"x\"\ntimeout = 5").unwrap();
+        assert!(matches!(
+            checks[0],
+            Check::Run {
+                timeout_secs: Some(5),
+                ..
+            }
+        ));
+        let checks = parse("[[check]]\nrun = \"x\"\nbackground = true").unwrap();
+        assert!(matches!(checks[0], Check::Service { .. }));
+    }
+
+    #[test]
+    fn unknown_key_is_refused() {
+        assert!(err("[[check]]\nrun = \"x\"\nredy = \"y\"").contains("unknown key 'redy'"));
+        assert!(err("[[check]]\nget = \"x\"\nbody = \"y\"").contains("unknown key 'body'"));
+        assert!(err("checks = []").contains("unknown top-level key"));
+    }
+
+    #[test]
+    fn a_rule_of_the_wrong_type_is_refused_never_dropped() {
+        // The silent-drop bug: `absent = ["ERROR", 500]` used to keep one rule
+        // and quietly discard the other.
+        assert!(err("[[check]]\nlog = \"a\"\nabsent = [\"E\", 500]").contains("only strings"));
+        assert!(err("[[check]]\nrun = \"x\"\ntimeout = \"5\"").contains("positive integer"));
+        assert!(err("[[check]]\nrun = \"x\"\nbackground = \"yes\"").contains("true or false"));
+        assert!(err("[[check]]\nget = \"x\"\nname = 3").contains("must be a string"));
+        assert!(err("[[check]]\nget = \"x\"\nexpect = 99999").contains("not a valid HTTP status"));
+    }
+
+    #[test]
+    fn a_check_must_assert_something() {
+        assert!(err("[[check]]\nlog = \"a\"").contains("at least one rule"));
+        assert!(err("[[check]]\nname = \"x\"").contains("needs a 'run', 'get', 'post' or 'log'"));
+        assert!(err("").contains("no checks"));
+        assert!(err("check = []").contains("no checks"));
+    }
+
+    #[test]
+    fn allow_belongs_to_services() {
+        assert!(err("[[check]]\nrun = \"x\"\nallow = [\"noise\"]")
+            .contains("only applies to a service"));
+        assert!(parse("[[check]]\nrun = \"x\"\nready = \"u\"\nallow = [\"noise\"]").is_ok());
+    }
+
+    #[test]
+    fn a_rule_accepts_one_string_or_a_list() {
+        let checks = parse("[[check]]\nlog = \"a\"\nabsent = \"ERROR\"").unwrap();
+        match &checks[0] {
+            Check::Log { absent, .. } => assert_eq!(absent, &["ERROR"]),
+            _ => panic!("expected a log check"),
+        }
+    }
+
+    #[test]
+    fn headers_are_a_flat_table_of_strings() {
+        let checks = parse(
+            "[[check]]\npost = \"http://x\"\nheaders = { content-type = \"application/json\" }",
+        )
+        .unwrap();
+        match &checks[0] {
+            Check::Http { headers, .. } => {
+                assert_eq!(headers[0].0, "content-type");
+                assert_eq!(headers[0].1, "application/json");
+            }
+            _ => panic!("expected an http check"),
+        }
+        assert!(
+            err("[[check]]\npost = \"http://x\"\nheaders = { a = 1 }").contains("must be a string")
+        );
+    }
+
+    #[test]
+    fn defaults_match_the_documented_contract() {
+        let checks = parse("[[check]]\nget = \"http://x\"").unwrap();
+        match &checks[0] {
+            // omitted expect = any 2xx (None), request deadline 5s, no budget
+            Check::Http {
+                expect,
+                timeout_secs,
+                max_ms,
+                ..
+            } => {
+                assert!(expect.is_none());
+                assert_eq!(*timeout_secs, 5);
+                assert!(max_ms.is_none());
+            }
+            _ => panic!("expected an http check"),
+        }
+        let checks = parse("[[check]]\nrun = \"x\"\nready = \"u\"").unwrap();
+        match &checks[0] {
+            Check::Service { timeout_secs, .. } => assert_eq!(*timeout_secs, 30),
+            _ => panic!("expected a service"),
+        }
+    }
+
+    #[test]
+    fn the_label_falls_back_to_the_source() {
+        let checks =
+            parse("[[check]]\nget = \"http://x/v\"\n[[check]]\nname = \"pretty\"\nrun = \"cmd\"")
+                .unwrap();
+        assert_eq!(checks[0].label(), "GET http://x/v");
+        assert_eq!(checks[1].label(), "pretty");
+    }
+
+    #[test]
+    fn errors_name_the_offending_check() {
+        // A config with three checks must point at the third, not "somewhere".
+        let e =
+            err("[[check]]\nrun = \"a\"\n[[check]]\nrun = \"b\"\n[[check]]\nrun = \"c\"\nnope = 1");
+        assert!(e.contains("check 3"), "{e}");
+    }
 }

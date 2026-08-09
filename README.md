@@ -139,6 +139,11 @@ sequenceDiagram
   group is killed on **every** exit path: normal end, probatum panic, SIGINT
   (Ctrl-C) or SIGTERM. If probatum dies, nothing it started survives. No
   zombie port between runs.
+- **Robust by design** — chunked HTTP bodies are decoded (an undecoded chunk
+  boundary would fail a `contains` on a body that really matched); captured
+  output is capped in memory while the evidence file stays complete; run
+  directories are reserved atomically, so concurrent runs never overwrite
+  each other; SIGINT exits 130 and SIGTERM 143.
 - **Evidence** — every run writes `.probatum/runs/NNNN/`: frozen config, one
   log per check, `run.json` (versioned `schema` field) with `duration_ms` for
   every check, so a slowdown is visible even when nothing fails. probatum

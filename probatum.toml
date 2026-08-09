@@ -10,6 +10,12 @@ run = "cargo clippy --offline -- -D warnings"
 [[check]]
 run = "cargo fmt -- --check"
 
+# the config language is a contract: parser edge cases are unit-tested, where
+# an end-to-end case would cost a process and a committed file each
+[[check]]
+run = "cargo test --offline"
+contains = ["test result: ok."]
+
 # --help must stay a complete, self-sufficient description of the surface
 [[check]]
 name = "--help documents the config surface"
@@ -53,10 +59,28 @@ run = "python3 demo-app/app.py >/dev/null 2>&1 & P=$!; sleep 1; ./target/debug/p
 name = "ownership survives probatum's own crash"
 run = "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/degraded-check.toml >/dev/null 2>&1; test $? -eq 101 && python3 demo-app/tests/portfree.py"
 
+# a chunked response must not produce a false failure (audit finding)
+[[check]]
+name = "chunked bodies are decoded"
+run = "./target/debug/probatum run .probatum/chunked-check.toml"
+timeout = 30
+
+# concurrent runs must not collide on the evidence directory
+[[check]]
+name = "20 concurrent runs each get their own evidence dir"
+run = "bash demo-app/tests/concurrent_runs.sh 20"
+timeout = 60
+
 # ownership: Ctrl-C (SIGINT) mid-run (exit 130) must still free the port
 [[check]]
 name = "ownership survives Ctrl-C"
 run = "./target/debug/probatum run .probatum/sigint-check.toml >/dev/null 2>&1 & P=$!; sleep 2; kill -INT $P; wait $P; test $? -eq 130 && python3 demo-app/tests/portfree.py"
+
+# SIGTERM must report 143 (128+15), not SIGINT's 130 — orchestrators read it
+[[check]]
+name = "SIGTERM exits 143 and frees the port"
+run = "./target/debug/probatum run .probatum/sigint-check.toml >/dev/null 2>&1 & P=$!; sleep 2; kill -TERM $P; wait $P; test $? -eq 143 && python3 demo-app/tests/portfree.py"
+timeout = 30
 
 # a rule of the wrong type must be an error, never a silently dropped rule
 [[check]]

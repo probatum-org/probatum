@@ -46,9 +46,23 @@ impl Drop for Guard {
     }
 }
 
-extern "C" fn on_signal(_sig: libc::c_int) {
+/// Release a slot once the group has been reaped, so a recycled PID can never
+/// be killed by a later sweep in a long run.
+pub fn unregister(pid: u32) {
+    for slot in PGIDS.iter() {
+        if slot
+            .compare_exchange(pid as i32, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return;
+        }
+    }
+}
+
+extern "C" fn on_signal(sig: libc::c_int) {
     kill_all();
-    unsafe { libc::_exit(130) };
+    // 128 + signal, as every shell reports it: 130 for SIGINT, 143 for SIGTERM.
+    unsafe { libc::_exit(128 + sig) };
 }
 
 /// Ctrl-C / kill must not leave orphans either. Services run in their own
