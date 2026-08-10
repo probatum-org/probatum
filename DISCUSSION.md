@@ -324,6 +324,24 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-09 — what watches the things that rot:** two staleness findings in
+  a row (the EOL container base, then `checkout@v4`/`login-action@v3` in the
+  hand-written workflows — GitHub had been warning about Node 20 and nobody
+  read it) made the gap explicit: **nothing in this repo watches its own
+  dependencies, and nothing should**. probatum verifies a running system; it
+  is not a supply-chain monitor, and adding that would be the same category
+  error as log aggregation. cidx is not it either — it owns containers and
+  presets, not action versions.
+  Dependabot is exactly that tool: `.github/dependabot.yml` now covers the
+  three things that rot here — actions, crates, and the container base (the
+  base is why it exists). Grouped weekly, one PR per ecosystem.
+  **Known interaction, deliberately not hidden**: `cidx.yml` is generated, so
+  Dependabot will propose bumps there too and `cidx generate --force` will
+  revert them; Dependabot's github-actions ecosystem has no per-file ignore.
+  The generator emits `checkout@v6`/`setup-go@v6` while v7 is out, so the
+  file ages in a place the repo cannot fix — filed as cidx-org/cidx#424.
+  Hand-written workflows are bumped and stay ours; the generated one is left
+  untouched on purpose (editing it would drift from its generator).
 - **2026-08-09 — external audit: accepted, reordered, partly refused (0.6.0):**
   the owner commissioned an audit from another model. It is accurate — every
   factual claim was verified true (zero `cargo test` tests, 64-PID registry
