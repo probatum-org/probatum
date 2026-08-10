@@ -54,6 +54,12 @@ timeout = 600                        # kill it after N seconds and fail
 [[check]]
 run = "cargo clippy -- -D warnings"
 
+# asserting a non-zero exit is a rule, not a shell detour
+[[check]]
+name = "the migration refuses a dirty database"
+run = "./migrate --check"
+expect = 2
+
 # a service — start it, wait until it answers, keep it alive for what follows
 [[check]]
 name = "api boots"
@@ -85,7 +91,8 @@ absent = ["ERROR", "panic"]
 
 Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
 (HTTP — `post` adds `body` and a flat `headers` table), `log` (external
-file). Rules: `expect` (HTTP status), `contains` (must appear), `absent`
+file). Rules: `expect` (HTTP status, or the exit code of a command), `contains`
+(must appear), `absent`
 (must not appear), `timeout` (how long to wait — command deadline, request
 deadline, or readiness deadline), `max_ms` (a correct answer that arrives
 too late still fails), `background` (keep a service running with no probe),

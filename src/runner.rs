@@ -122,8 +122,17 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 contains,
                 absent,
                 timeout_secs,
+                expect,
                 ..
-            } => run_cmd(cmd, contains, absent, *timeout_secs, &log_file, check),
+            } => run_cmd(
+                cmd,
+                contains,
+                absent,
+                *timeout_secs,
+                *expect,
+                &log_file,
+                check,
+            ),
             Check::Service {
                 cmd,
                 ready,
@@ -253,11 +262,13 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
     Ok(report)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_cmd(
     cmd: &str,
     contains: &[String],
     absent: &[String],
     timeout_secs: Option<u64>,
+    expect: i64,
     log_file: &Path,
     check: &Check,
 ) -> CheckReport {
@@ -319,8 +330,10 @@ fn run_cmd(
     let lines = logs.snapshot();
 
     match status {
-        Ok(s) if s.success() => {
-            // Exit 0 — but explicit rules still apply to the output.
+        // The expected code (0 unless declared) is the pass condition. A
+        // command killed by a signal has no code and can never match.
+        Ok(s) if s.code() == Some(expect as i32) => {
+            // Expected exit — but explicit rules still apply to the output.
             if let Some(cause) = scan_lines(&lines, absent, &[], false) {
                 return report(
                     check,
@@ -342,19 +355,18 @@ fn run_cmd(
             report(check, log_file, Status::Passed, summarize(&lines), None)
         }
         Ok(s) => {
+            let detail = if expect == 0 {
+                format!("exited {}", fmt_status(&s))
+            } else {
+                format!("exited {} (expected {expect})", fmt_status(&s))
+            };
             let cause = diagnose::from_logs(&lines).or_else(|| {
                 Some(Cause {
-                    headline: format!("exited {}", fmt_status(&s)),
+                    headline: detail.clone(),
                     correlated: diagnose::tail(&lines, 5),
                 })
             });
-            report(
-                check,
-                log_file,
-                Status::Failed,
-                Some(format!("exited {}", fmt_status(&s))),
-                cause,
-            )
+            report(check, log_file, Status::Failed, Some(detail), cause)
         }
         Err(e) => errored(check, log_file, format!("couldn't run: {e}")),
     }

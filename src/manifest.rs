@@ -29,6 +29,11 @@ pub enum Check {
         /// `timeout` — kill the command after N seconds and fail. None = wait
         /// forever (a hung command would otherwise block the whole run).
         timeout_secs: Option<u64>,
+        /// `expect` — the exit code this command should return (default 0).
+        /// Same word as on `get`/`post`, same meaning: the result code I
+        /// expect. Without it, asserting anything but success means dropping
+        /// out of the config into `; test $? -eq N`.
+        expect: i64,
     },
     /// `run` + `ready`/`timeout` — there is no exit code to trust while it
     /// runs, so the default crash filter applies to its logs; `allow` exempts.
@@ -168,6 +173,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                     "ready",
                     "background",
                     "timeout",
+                    "expect",
                     "contains",
                     "absent",
                     "allow",
@@ -183,6 +189,9 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
             // `ready` (probe it) or `background` (just keep it running). That
             // frees `timeout` to mean one thing everywhere — how long we wait.
             if map.contains_key("ready") || opt_bool(map, "background", n)?.unwrap_or(false) {
+                if map.contains_key("expect") {
+                    bail!("check {n}: 'expect' is the exit code of a command that finishes — a service is kept running, so it has none");
+                }
                 checks.push(Check::Service {
                     cmd,
                     name,
@@ -202,6 +211,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                     contains,
                     absent,
                     timeout_secs: opt_u64(map, "timeout", n)?,
+                    expect: opt_i64(map, "expect", n)?.unwrap_or(0),
                 });
             }
         } else {
@@ -224,6 +234,20 @@ fn opt_str(map: &Table, key: &str, n: usize) -> Result<Option<String>> {
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(v) => bail!(
             "check {n}: '{key}' must be a string, found {}",
+            v.type_str()
+        ),
+    }
+}
+
+/// A signed integer: exit codes are small non-negative numbers, but keeping
+/// the type honest means a negative value fails validation rather than wrapping.
+fn opt_i64(map: &Table, key: &str, n: usize) -> Result<Option<i64>> {
+    match map.get(key) {
+        None => Ok(None),
+        Some(Value::Integer(i)) if (0..=255).contains(i) => Ok(Some(*i)),
+        Some(Value::Integer(i)) => bail!("check {n}: '{key}' = {i} is not an exit code (0-255)"),
+        Some(v) => bail!(
+            "check {n}: '{key}' must be an integer, found {}",
             v.type_str()
         ),
     }
@@ -366,6 +390,18 @@ mod tests {
         ));
         let checks = parse("[[check]]\nrun = \"x\"\nbackground = true").unwrap();
         assert!(matches!(checks[0], Check::Service { .. }));
+    }
+
+    #[test]
+    fn expect_is_the_exit_code_of_a_command() {
+        let checks = parse("[[check]]\nrun = \"x\"\nexpect = 2").unwrap();
+        assert!(matches!(checks[0], Check::Run { expect: 2, .. }));
+        // default stays "must succeed"
+        let checks = parse("[[check]]\nrun = \"x\"").unwrap();
+        assert!(matches!(checks[0], Check::Run { expect: 0, .. }));
+        // a service is kept running, so it has no exit code to expect
+        assert!(err("[[check]]\nrun = \"x\"\nready = \"u\"\nexpect = 2").contains("kept running"));
+        assert!(err("[[check]]\nrun = \"x\"\nexpect = 300").contains("not an exit code"));
     }
 
     #[test]

@@ -45,6 +45,7 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   run = "<cmd>"                 command; exit code is the authority
   contains = [".."]             output must contain (applies even on exit 0)
   absent = [".."]               output must not contain
+  expect = <code>               the exit code it should return (default 0)
   timeout = <secs>              kill it after N seconds and fail
 
   [[check]]                     with ready or background it is a service:
