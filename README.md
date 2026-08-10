@@ -162,8 +162,17 @@ sequenceDiagram
   a single measurement is noisy, and a flaky red check is worse than no
   check.
 
+- **One document per outcome** — with `--json`, every outcome that returns
+  through main prints exactly one schema-valid document on stdout (human text
+  stays on stderr), including an invalid config: `error.kind` is
+  `invalid_config` and the run fields are simply absent. An agent never has
+  to parse stderr to find out what happened. A signal exits from its handler
+  and emits nothing — writing JSON there would not be async-signal-safe.
+
 Exit codes: `0` all passed · `1` at least one check failed · `2` couldn't run
-(invalid config, dirty environment, tool error).
+(invalid config, dirty environment, tool error) · `101` probatum itself
+panicked — the document says `internal_error`, the exit code keeps saying
+"probatum broke", not "your system failed".
 
 ## Demo
 

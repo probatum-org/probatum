@@ -324,6 +324,34 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-10 — `expect` on run, then total `--json` (0.7.0, 0.8.0):** a bug
+  report from the cidx side named two things. **First**: a `run` check could
+  only assert success, so anything else meant leaving the config for
+  `; test $? -eq N`. probatum's own config did it **eleven times** (codes 1,
+  2, 101, 130, 143) — the author escaping his own model is the clearest
+  possible signal. `expect` now works on `run` as the exit code, the same
+  word and meaning it already had on `get`/`post`; a service rejects it
+  (it is kept running, so it has none). Eight of the eleven are gone; the
+  three left are real shell orchestration (background, kill, probe a port),
+  not exit-code assertions.
+  **Second**: probatum could not test its own `--json`. The reported cause
+  was merged stdout/stderr; the actual cause was `expect` — a run exiting 2
+  failed the check before any rule was evaluated. Measured rather than
+  assumed: stdout *is* already pure JSON (it parses alone). What the merge
+  still prevents is asserting that purity from inside a check, which is a
+  narrow need and was left alone rather than answered with stream-scoped
+  rules nobody has asked for.
+  **Then the deferred item, done (schema 2)**: `--json` now emits exactly one
+  schema-valid document for every outcome that returns through main. An
+  envelope owns `schema` and `verdict`; the run fields are flattened in when
+  a run happened (so a schema-1 reader still finds them where they were), and
+  `error { kind, message }` appears when there is nothing to report —
+  `invalid_config` for a config that never parsed, `internal_error` for a
+  panic (which still exits 101: the document says what broke, the exit code
+  says *who*). `run.json` on disk is now the same document stdout prints.
+  **Honest hole, by design**: a signal exits from its handler and emits
+  nothing — writing JSON there is not async-signal-safe. Stated in `--help`
+  and the README rather than papered over. Suite: 24 checks, 12 unit tests.
 - **2026-08-09 — what watches the things that rot:** two staleness findings in
   a row (the EOL container base, then `checkout@v4`/`login-action@v3` in the
   hand-written workflows — GitHub had been warning about Node 20 and nobody

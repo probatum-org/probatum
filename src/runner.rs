@@ -39,9 +39,12 @@ pub struct CheckReport {
     pub log_file: String,
 }
 
+/// The run half of the outcome document. `schema` and `verdict` live on the
+/// envelope (main.rs) so that an outcome with no run — an invalid config —
+/// still carries them.
 #[derive(Debug, serde::Serialize)]
 pub struct RunReport {
-    pub schema: u32,
+    #[serde(skip)]
     pub verdict: String, // "pass" | "fail" | "couldn't-run"
     pub failed: usize,
     pub errored: usize,
@@ -243,7 +246,6 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
     };
 
     let report = RunReport {
-        schema: 1,
         verdict: verdict.into(),
         failed,
         errored,
@@ -254,11 +256,6 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
         checks: out,
         replay: format!("probatum run {} --seed {}", frozen.display(), seed),
     };
-    std::fs::write(
-        run_dir.join("run.json"),
-        serde_json::to_string_pretty(&report)?,
-    )
-    .ok();
     Ok(report)
 }
 

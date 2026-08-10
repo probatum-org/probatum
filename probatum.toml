@@ -20,7 +20,7 @@ contains = ["test result: ok."]
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "max_ms =", "expect =", "exit codes", "probatum init"]
+contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "max_ms =", "expect =", "exit codes", "schema-valid document", "probatum init"]
 
 # the full demo flow (service + http + external log) must be green
 [[check]]
@@ -115,7 +115,23 @@ timeout = 30
 name = "--json carries the machine contract"
 run = "./target/debug/probatum run .probatum/missing-log-check.toml --json"
 expect = 2
-contains = ['"schema": 1', '"verdict"', '"duration_ms"', '"run_dir"']
+contains = ['"schema": 2', '"verdict"', '"duration_ms"', '"run_dir"']
+
+# --json must answer for EVERY outcome, including the ones where no run
+# happened at all: an agent should never have to parse stderr to find out.
+[[check]]
+name = "--json answers on an invalid config"
+run = "./target/debug/probatum run .probatum/invalid-key.toml --json"
+expect = 2
+contains = ['"schema": 2', '"kind": "invalid_config"', '"message"']
+absent = ['"checks"']
+
+[[check]]
+name = "--json answers when probatum itself panics"
+run = "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/background.toml --json 2>/dev/null"
+expect = 101
+contains = ['"kind": "internal_error"', '"panic: PROBATUM_TEST_PANIC"']
+timeout = 30
 
 # a background service (no probe) is kept alive for the checks that follow
 [[check]]

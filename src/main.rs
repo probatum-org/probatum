@@ -15,19 +15,119 @@ use std::io::Read;
 
 fn main() {
     // Exit codes: 0 = all passed, 1 = at least one check failed,
-    // 2 = couldn't run (invalid config, dirty environment, tool error).
-    let code = match real_main() {
-        Ok(code) => code,
-        Err(e) => {
+    // 2 = couldn't run (invalid config, dirty environment, tool error),
+    // 101 = probatum itself panicked.
+    //
+    // `--json` is read here, before anything can fail, so that a config we
+    // cannot even parse still answers in the protocol the caller asked for.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let json = args.iter().any(|a| a == "--json");
+
+    let code = match std::panic::catch_unwind(|| real_main(&args)) {
+        Ok(Ok(code)) => code,
+        Ok(Err(e)) => {
             eprintln!("probatum: {e:#}");
+            if json {
+                Outcome::of_error(kind_of(&e), format!("{e:#}")).print();
+            }
             2
+        }
+        Err(panic) => {
+            // The default hook already printed the panic to stderr; the caller
+            // still gets a document, and 101 keeps saying "probatum broke",
+            // not "your system failed".
+            if json {
+                Outcome::of_error("internal_error", panic_message(&panic)).print();
+            }
+            101
         }
     };
     std::process::exit(code);
 }
 
+/// Which failure class the caller is looking at. An agent switches on this:
+/// a bad config will never fix itself by retrying, a busy port might.
+fn kind_of(e: &anyhow::Error) -> &'static str {
+    let text = format!("{e:#}");
+    if text.contains("invalid config")
+        || text.contains("check ")
+        || text.contains("no checks")
+        || text.contains("unknown top-level key")
+        || text.starts_with("usage:")
+        || text.contains("cannot read manifest")
+        || text.contains("probatum.toml")
+    {
+        "invalid_config"
+    } else {
+        "execution_error"
+    }
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = panic.downcast_ref::<&str>() {
+        format!("panic: {s}")
+    } else if let Some(s) = panic.downcast_ref::<String>() {
+        format!("panic: {s}")
+    } else {
+        "panic".into()
+    }
+}
+
 const USAGE: &str = "usage: probatum run [probatum.toml|-] [--json] [--seed N] | probatum init";
 const DEFAULT_CONFIG: &str = "probatum.toml";
+
+/// run.json / `--json` contract version. 2 added the envelope: every outcome
+/// carries schema+verdict, and `error` appears when there is no run to report.
+const SCHEMA: u32 = 2;
+
+/// What `--json` emits, for every outcome. The run fields are flattened in
+/// when a run happened, so a reader of schema 1 still finds them where they
+/// were; `error` is present exactly when the verdict is couldn't-run and
+/// nothing ran.
+#[derive(serde::Serialize)]
+struct Outcome<'a> {
+    schema: u32,
+    verdict: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<OutcomeError>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    run: Option<&'a runner::RunReport>,
+}
+
+#[derive(serde::Serialize)]
+struct OutcomeError {
+    /// invalid_config | execution_error | internal_error
+    kind: &'static str,
+    message: String,
+}
+
+impl<'a> Outcome<'a> {
+    fn of_run(run: &'a runner::RunReport) -> Self {
+        Outcome {
+            schema: SCHEMA,
+            verdict: &run.verdict,
+            error: None,
+            run: Some(run),
+        }
+    }
+    fn of_error(kind: &'static str, message: String) -> Self {
+        Outcome {
+            schema: SCHEMA,
+            verdict: "couldn't-run",
+            error: Some(OutcomeError { kind, message }),
+            run: None,
+        }
+    }
+    fn print(&self) {
+        // stdout carries the protocol and nothing else; human text is stderr.
+        match serde_json::to_string_pretty(self) {
+            Ok(doc) => println!("{doc}"),
+            // Serialization cannot realistically fail, but claiming a document
+            // we did not emit would be worse than saying so.
+            Err(e) => eprintln!("probatum: cannot serialize the outcome: {e}"),
+        }
+    }
+}
 
 /// The whole product in one --help: an agent (or a human) can use probatum
 /// correctly from this text alone, no external docs needed.
@@ -85,12 +185,21 @@ even if probatum crashes or is Ctrl-C'd.
 
 exit codes: 0 all passed · 1 a check failed (cause on screen) · 2 couldn't
 run (invalid config, dirty environment, unobservable target — fix the env,
-don't force). evidence: .probatum/runs/NNNN/ (frozen config, logs, run.json)"#;
+don't force) · 101 probatum itself panicked.
 
-fn real_main() -> Result<i32> {
+with --json, every outcome that returns through main emits exactly one
+schema-valid document on stdout, human text staying on stderr — including an
+invalid config, where `error.kind` is invalid_config and the run fields are
+absent. a signal (Ctrl-C, SIGTERM) exits from the handler and emits nothing:
+writing JSON there is not async-signal-safe.
+
+evidence: .probatum/runs/NNNN/ (frozen config, logs, run.json — the same
+document --json prints)"#;
+
+fn real_main(args: &[String]) -> Result<i32> {
     own::install_signal_handlers(); // Ctrl-C/kill must not leave orphans
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = args.to_vec();
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("{HELP}");
         return Ok(0);
@@ -149,8 +258,13 @@ fn real_main() -> Result<i32> {
     let seed = seed.unwrap_or_else(random_seed);
     let report = runner::run(&checks, &text, &source, seed)?;
 
+    // The evidence copy is the same document the caller gets.
+    let outcome = Outcome::of_run(&report);
+    if let Ok(doc) = serde_json::to_string_pretty(&outcome) {
+        std::fs::write(std::path::Path::new(&report.run_dir).join("run.json"), doc).ok();
+    }
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        outcome.print();
     } else {
         verdict::print(&report);
     }
