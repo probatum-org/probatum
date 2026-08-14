@@ -91,7 +91,9 @@ absent = ["ERROR", "panic"]
 
 Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
 (HTTP — `post` adds `body` and a flat `headers` table), `log` (external
-file). Rules: `expect` (HTTP status, or the exit code of a command), `contains`
+file). `Set-Cookie` answers are kept in a per-host jar for the run and
+replayed on the later HTTP checks, so a login check's session carries to the
+checks that follow — no config needed (an explicit `Cookie` header wins). Rules: `expect` (HTTP status, or the exit code of a command), `contains`
 (must appear), `absent`
 (must not appear), `timeout` (how long to wait — command deadline, request
 deadline, or readiness deadline), `max_ms` (a correct answer that arrives

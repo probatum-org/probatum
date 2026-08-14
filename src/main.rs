@@ -170,6 +170,10 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   body = "<string>"             request body (Content-Type defaults to
   headers = { k = "v" }         application/json when body is set)
 
+cookies: Set-Cookie answers are kept in a per-host jar for the run and
+replayed on the later get/post checks — log in, then check what needed the
+login. an explicit Cookie header on a check wins over the jar.
+
   [[check]]
   log = "<path>"                external file, only lines written during THIS
   contains = [".."]             run count; at least one rule required

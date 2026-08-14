@@ -104,6 +104,9 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
     let mut services: Vec<Service> = Vec::new();
     let mut out: Vec<CheckReport> = Vec::new();
     let mut halted = false;
+    // Cookie jar for the run, per host: what a check's response sets, the later
+    // http checks replay — log in, then check what needed the login (issue #5).
+    let mut jar: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
     for (i, check) in checks.iter().enumerate() {
         let log_file = run_dir.join(format!("check-{}.log", i + 1));
@@ -177,6 +180,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 *max_ms,
                 &log_file,
                 check,
+                &mut jar,
             ),
             Check::Log {
                 path,
@@ -508,6 +512,7 @@ fn run_http(
     max_ms: Option<u128>,
     log_file: &Path,
     check: &Check,
+    jar: &mut HashMap<String, Vec<(String, String)>>,
 ) -> CheckReport {
     // A body without an explicit content-type defaults to JSON — the 99% case
     // for smoke-testing an API (documented in --help).
@@ -519,9 +524,22 @@ fn run_http(
     {
         hdrs.push(("Content-Type".into(), "application/json".into()));
     }
+    // Replay the jar for this host — an explicit Cookie header on the check wins.
+    let host = crate::http::host_of(url);
+    if let Some(cookies) = jar.get(&host) {
+        if !cookies.is_empty() && !hdrs.iter().any(|(k, _)| k.eq_ignore_ascii_case("cookie")) {
+            let line = cookies
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join("; ");
+            hdrs.push(("Cookie".into(), line));
+        }
+    }
     let sent = Instant::now();
     match crate::http::request(method, url, body, &hdrs, Duration::from_secs(timeout_secs)) {
         Ok(resp) => {
+            store_cookies(jar.entry(host).or_default(), &resp.set_cookie);
             let elapsed_ms = sent.elapsed().as_millis();
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");
@@ -693,6 +711,26 @@ fn run_log(
         Some(format!("{} new line(s) checked", lines.len())),
         None,
     )
+}
+
+/// Fold `Set-Cookie` answers into the host's jar: last value per name wins,
+/// `Max-Age=0` (the logout idiom) deletes. Attributes (Path, Expires, Secure…)
+/// are ignored — the jar lives one run, against one host, over plain http.
+fn store_cookies(cookies: &mut Vec<(String, String)>, set_cookie: &[String]) {
+    for sc in set_cookie {
+        let Some((name, value)) = sc.split(';').next().unwrap_or("").split_once('=') else {
+            continue;
+        };
+        let (name, value) = (name.trim().to_string(), value.trim().to_string());
+        cookies.retain(|(n, _)| n != &name);
+        if !sc
+            .split(';')
+            .skip(1)
+            .any(|a| a.trim().eq_ignore_ascii_case("max-age=0"))
+        {
+            cookies.push((name, value));
+        }
+    }
 }
 
 /// First line matching a forbidden pattern (optionally including the default

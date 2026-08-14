@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 #   DEGRADE=1             -> become ready, then log an ERROR (degrades after readiness)
 #   LOG_FILE=path         -> also append log lines to an external file (log: checks)
 #   HANG=1                -> boot fine but never open the port (readiness timeout)
+#   AUTH=1                -> POST /api/events requires the session cookie from /auth/login
 WAL_DIR = os.environ.get("WAL_DIR") or os.path.join(os.path.dirname(__file__), "data", "wal")
 SEGMENTS = ["0001", "0002", "0003", "0004"]
 
@@ -60,7 +61,22 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "not found"})
 
     def do_POST(self):
-        if self.path == "/api/events":
+        if self.path == "/auth/login":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                creds = json.loads(self.rfile.read(length))
+                ok = creds.get("username") == "editor" and creds.get("password") == "hunter2"
+            except ValueError:
+                ok = False
+            if ok:
+                log("INFO", "auth login ok, session issued")
+                self._reply(200, {"token": "letmein42"}, cookie="session=letmein42; Path=/")
+            else:
+                self._reply(401, {"error": "bad credentials"})
+        elif self.path == "/api/events":
+            if os.environ.get("AUTH") and "session=letmein42" not in self.headers.get("Cookie", ""):
+                self._reply(401, {"error": "login required"})
+                return
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 event = json.loads(self.rfile.read(length))
@@ -72,11 +88,13 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._reply(404, {"error": "not found"})
 
-    def _reply(self, code, obj):
+    def _reply(self, code, obj, cookie=None):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
         self.end_headers()
         self.wfile.write(body)
 

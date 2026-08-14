@@ -324,6 +324,22 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-14 — cookie jar for the run (0.9.0, issue #5):** the moment the
+  project under test grew a login, every authenticated check went
+  unexpressible at once — `headers` is static and nothing carried between
+  checks, so *log in → do the thing → observe* could not be written. The
+  issue weighed two shapes and the cheaper one won: responses' `Set-Cookie`
+  are kept in a per-host jar for the run and replayed on the later `get`/
+  `post` checks. Zero new config surface — the login sequence from the issue
+  just works; an explicit `Cookie` header on a check wins over the jar, and
+  `Max-Age=0` (the logout idiom) deletes. **Refused, as the issue itself
+  argued**: `capture` (JSON field → named value → `${tok}` interpolation) —
+  more surface, covers bearer tokens, but it starts turning the config into
+  a program; it stays out until a real recurring need that cookies cannot
+  hold. Also out: OAuth dances, retries, conditional checks. Demo gained
+  `AUTH=1` (session-gated write path) + `/auth/login`; a dogfooding check
+  runs the full sequence, including 401-before-login next to 200-after in
+  the same run — the pair that proves the jar is load-bearing. Suite: 25.
 - **2026-08-10 — `expect` on run, then total `--json` (0.7.0, 0.8.0):** a bug
   report from the cidx side named two things. **First**: a `run` check could
   only assert success, so anything else meant leaving the config for

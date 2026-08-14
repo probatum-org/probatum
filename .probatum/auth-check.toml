@@ -1,0 +1,41 @@
+# The issue #5 sequence: log in → do the thing that required logging in →
+# observe the result. The session cookie set by /auth/login is carried by the
+# run's cookie jar — no new config surface, the checks just follow each other.
+#   probatum run .probatum/auth-check.toml
+
+[[check]]
+name = "app boots with auth on"
+run = "AUTH=1 python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15
+
+[[check]]
+name = "a write without a session is refused"
+post = "http://127.0.0.1:8087/api/events"
+body = '{"key": "k1", "value": 1}'
+expect = 401
+
+[[check]]
+name = "bad credentials are refused"
+post = "http://127.0.0.1:8087/auth/login"
+body = '{"username": "editor", "password": "wrong"}'
+expect = 401
+
+[[check]]
+name = "good credentials return a session"
+post = "http://127.0.0.1:8087/auth/login"
+body = '{"username": "editor", "password": "hunter2"}'
+expect = 200
+contains = ["token"]
+
+[[check]]
+name = "a logged-in editor can publish"
+post = "http://127.0.0.1:8087/api/events"
+body = '{"key": "hello", "value": "first"}'
+expect = 200
+contains = ['"stored": "hello"']
+
+[[check]]
+name = "the published event is visible"
+get = "http://127.0.0.1:8087/api/version"
+contains = ['"keys": 5']

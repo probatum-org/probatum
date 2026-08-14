@@ -9,6 +9,15 @@ use std::time::Duration;
 pub struct Response {
     pub status: u16,
     pub body: String,
+    /// Raw `Set-Cookie` header values — the runner's per-run cookie jar reads
+    /// them so a login check's session carries to the checks that follow (#5).
+    pub set_cookie: Vec<String>,
+}
+
+/// `host:port` of an http URL — the scope of the cookie jar.
+pub fn host_of(url: &str) -> String {
+    let rest = url.strip_prefix("http://").unwrap_or(url);
+    rest.split('/').next().unwrap_or(rest).to_string()
 }
 
 /// `url` like `http://127.0.0.1:8080/healthz`
@@ -123,7 +132,18 @@ pub fn request(
     } else {
         raw_body.to_string()
     };
-    Ok(Response { status, body })
+    let set_cookie = head
+        .lines()
+        .skip(1)
+        .filter_map(|l| l.split_once(':'))
+        .filter(|(k, _)| k.trim().eq_ignore_ascii_case("set-cookie"))
+        .map(|(_, v)| v.trim().to_string())
+        .collect();
+    Ok(Response {
+        status,
+        body,
+        set_cookie,
+    })
 }
 
 /// Reassemble a chunked body: <hex size>CRLF<data>CRLF … 0CRLF.

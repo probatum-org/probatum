@@ -20,7 +20,7 @@ contains = ["test result: ok."]
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "max_ms =", "expect =", "exit codes", "schema-valid document", "probatum init"]
+contains = ["run =", "get =", "post =", "log =", "timeout =", "background =", "max_ms =", "expect =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init"]
 
 # the full demo flow (service + http + external log) must be green
 [[check]]
@@ -131,6 +131,13 @@ name = "--json answers when probatum itself panics"
 run = "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/background.toml --json 2>/dev/null"
 expect = 101
 contains = ['"kind": "internal_error"', '"panic: PROBATUM_TEST_PANIC"']
+timeout = 30
+
+# the cookie jar: a session set by a login check is replayed by the checks
+# that follow — log in, publish, observe (issue #5)
+[[check]]
+name = "cookie jar carries the session across checks"
+run = "./target/debug/probatum run .probatum/auth-check.toml"
 timeout = 30
 
 # a background service (no probe) is kept alive for the checks that follow
