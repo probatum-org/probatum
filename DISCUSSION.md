@@ -324,6 +324,24 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-15 — the CRUD surface completed (0.10.0, issues #6 and #7):** two
+  gaps from the same editor slice, both the "same check, missing where it's
+  needed" kind. **#6**: `absent` existed on `run` and `log` but was rejected
+  on HTTP checks, so "prove it is gone" — an unpublished post still on the
+  index, a revoked key still in a listing — was unexpressible. Now the same
+  rule, same semantics, on the response body; failure evidence quotes the
+  lines where the pattern still appears. **#7**: no `put`/`patch`/`delete`,
+  and the usual `run: curl` escape hatch had died with 0.9.0 — a spawned
+  process does not share the cookie jar, so authenticated updates had no
+  expressible check at all. The writing methods now share one parsed shape
+  (`post`/`put`/`patch`/`delete` + body/headers); `get` deliberately keeps
+  rejecting `body`. One real client fix rode along: Content-Length was only
+  sent on POST, so a PUT/PATCH body would never have been read by the server.
+  Demo grew an index (`GET /api/events`), auth-gated PUT/DELETE and a 204
+  no-body answer; the auth suite is now the full editor story — publish,
+  edit (an explicit Cookie header beating the jar proves the anonymous edit
+  is refused), unpublish, gone from the index. Suite: 25 checks, auth
+  sub-suite 10.
 - **2026-08-14 — cookie jar for the run (0.9.0, issue #5):** the moment the
   project under test grew a login, every authenticated check went
   unexpressible at once — `headers` is static and nothing carried between

@@ -1,6 +1,6 @@
-# The issue #5 sequence: log in → do the thing that required logging in →
-# observe the result. The session cookie set by /auth/login is carried by the
-# run's cookie jar — no new config surface, the checks just follow each other.
+# The editor story: log in → publish → edit → unpublish → gone from the index.
+# The session cookie set by /auth/login is carried by the run's cookie jar
+# (issue #5); put/delete are issue #7 and `absent` on an http body issue #6.
 #   probatum run .probatum/auth-check.toml
 
 [[check]]
@@ -39,3 +39,30 @@ contains = ['"stored": "hello"']
 name = "the published event is visible"
 get = "http://127.0.0.1:8087/api/version"
 contains = ['"keys": 5']
+
+# an explicit Cookie header wins over the jar — so this PUT is anonymous
+# even though the jar holds a live session, and must be refused
+[[check]]
+name = "an edit without the session is refused"
+put = "http://127.0.0.1:8087/api/events/hello"
+body = '{"value": "hacked"}'
+headers = { Cookie = "session=stolen" }
+expect = 401
+
+[[check]]
+name = "a logged-in editor can edit"
+put = "http://127.0.0.1:8087/api/events/hello"
+body = '{"value": "corrected"}'
+expect = 200
+contains = ['"updated": "hello"']
+
+[[check]]
+name = "unpublish takes the post down"
+delete = "http://127.0.0.1:8087/api/events/hello"
+expect = 204
+
+[[check]]
+name = "the unpublished event is gone from the index"
+get = "http://127.0.0.1:8087/api/events"
+contains = ['"keys"']
+absent = ['"hello"']

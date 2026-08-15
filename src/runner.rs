@@ -166,6 +166,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 headers,
                 expect,
                 contains,
+                absent,
                 timeout_secs,
                 max_ms,
                 ..
@@ -176,6 +177,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 headers,
                 *expect,
                 contains,
+                absent,
                 *timeout_secs,
                 *max_ms,
                 &log_file,
@@ -508,6 +510,7 @@ fn run_http(
     headers: &[(String, String)],
     expect: Option<u16>,
     contains: &[String],
+    absent: &[String],
     timeout_secs: u64,
     max_ms: Option<u128>,
     log_file: &Path,
@@ -567,6 +570,24 @@ fn run_http(
                     Some(Cause {
                         headline: format!("unexpected HTTP {}", resp.status),
                         correlated: resp.body.lines().take(3).map(String::from).collect(),
+                    }),
+                );
+            }
+            if let Some(hit) = absent.iter().find(|p| resp.body.contains(p.as_str())) {
+                return report(
+                    check,
+                    log_file,
+                    Status::Failed,
+                    Some(format!("body contains \"{hit}\"")),
+                    Some(Cause {
+                        headline: format!("HTTP {} but body contains \"{hit}\"", resp.status),
+                        correlated: resp
+                            .body
+                            .lines()
+                            .filter(|l| l.contains(hit.as_str()))
+                            .take(3)
+                            .map(|l| l.trim().to_string())
+                            .collect(),
                     }),
                 );
             }

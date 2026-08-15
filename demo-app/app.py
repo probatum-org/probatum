@@ -53,6 +53,8 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(200, {"status": "ok"})
         elif self.path == "/api/version":
             self._reply(200, {"version": "1.3.0", "keys": len(STATE)})
+        elif self.path == "/api/events":
+            self._reply(200, {"keys": sorted(STATE.keys())})
         elif self.path == "/api/slow":
             # Correct answer, just late — the max_ms case.
             time.sleep(1)
@@ -74,7 +76,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._reply(401, {"error": "bad credentials"})
         elif self.path == "/api/events":
-            if os.environ.get("AUTH") and "session=letmein42" not in self.headers.get("Cookie", ""):
+            if not self._authed():
                 self._reply(401, {"error": "login required"})
                 return
             try:
@@ -88,15 +90,49 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._reply(404, {"error": "not found"})
 
+    def do_PUT(self):
+        if not self._authed():
+            self._reply(401, {"error": "login required"})
+        elif self.path.startswith("/api/events/"):
+            key = self.path.rsplit("/", 1)[1]
+            if key not in STATE:
+                self._reply(404, {"error": "not found"})
+                return
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                event = json.loads(self.rfile.read(length))
+                STATE[key] = event["value"]
+                log("INFO", f"http event updated key={key}")
+                self._reply(200, {"updated": key})
+            except (KeyError, ValueError):
+                self._reply(400, {"error": "bad event"})
+        else:
+            self._reply(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        if not self._authed():
+            self._reply(401, {"error": "login required"})
+        elif self.path.startswith("/api/events/") and self.path.rsplit("/", 1)[1] in STATE:
+            key = self.path.rsplit("/", 1)[1]
+            del STATE[key]
+            log("INFO", f"http event deleted key={key}")
+            self._reply(204, None)
+        else:
+            self._reply(404, {"error": "not found"})
+
+    def _authed(self):
+        return not os.environ.get("AUTH") or "session=letmein42" in self.headers.get("Cookie", "")
+
     def _reply(self, code, obj, cookie=None):
-        body = json.dumps(obj).encode()
+        body = b"" if obj is None else json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         if cookie:
             self.send_header("Set-Cookie", cookie)
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
     def log_message(self, fmt, *args):
         log("INFO", f"http {fmt % args}")

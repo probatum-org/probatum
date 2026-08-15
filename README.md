@@ -22,7 +22,7 @@ One file in, one verdict out:
 flowchart LR
     Y["probatum.toml<br/>flat checks, no logic"] --> P(["probatum run"])
     P --> R["run<br/>a command"]
-    P --> G["get / post<br/>an HTTP endpoint"]
+    P --> G["get / post / put<br/>patch / delete<br/>an HTTP endpoint"]
     P --> L["log<br/>an external log file"]
     R --> V{"verdict"}
     G --> V
@@ -90,8 +90,8 @@ absent = ["ERROR", "panic"]
 ```
 
 Sources: `run` (command), `run` + `ready`/`timeout` (service), `get` / `post`
-(HTTP — `post` adds `body` and a flat `headers` table), `log` (external
-file). `Set-Cookie` answers are kept in a per-host jar for the run and
+/ `put` / `patch` / `delete` (HTTP — the writing methods add `body` and a
+flat `headers` table), `log` (external file). `Set-Cookie` answers are kept in a per-host jar for the run and
 replayed on the later HTTP checks, so a login check's session carries to the
 checks that follow — no config needed (an explicit `Cookie` header wins). Rules: `expect` (HTTP status, or the exit code of a command), `contains`
 (must appear), `absent`

@@ -6,6 +6,7 @@
 //!   [[check]] run = ... + ready/timeout    start a service, wait until it answers, keep it alive
 //!   [[check]] get = "<url>"                HTTP GET (embedded client)
 //!   [[check]] post = "<url>"               HTTP POST (+ body, headers)
+//!   [[check]] put/patch/delete = "<url>"   same shape as post
 //!   [[check]] log = "<path>"               external log file, only lines written during this run
 //!
 //! Rules: expect (HTTP status), contains (must appear), absent (must not appear),
@@ -46,18 +47,19 @@ pub enum Check {
         absent: Vec<String>,
         allow: Vec<String>,
     },
-    /// `get` / `post` — embedded HTTP check. Omitted `expect` = any 2xx;
-    /// `contains` applies to the response body. `post` adds `body` and
-    /// `headers` (flat string table; Content-Type defaults to application/json
-    /// when a body is present).
+    /// `get` / `post` / `put` / `patch` / `delete` — embedded HTTP check.
+    /// Omitted `expect` = any 2xx; `contains`/`absent` apply to the response
+    /// body. The writing methods add `body` and `headers` (flat string table;
+    /// Content-Type defaults to application/json when a body is present).
     Http {
-        method: &'static str, // "GET" | "POST"
+        method: &'static str,
         url: String,
         name: Option<String>,
         body: Option<String>,
         headers: Vec<(String, String)>,
         expect: Option<u16>,
         contains: Vec<String>,
+        absent: Vec<String>,
         /// `timeout` — request deadline in seconds (default 5).
         timeout_secs: u64,
         /// `max_ms` — the answer must arrive within N milliseconds. Distinct
@@ -115,11 +117,26 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
             .as_table()
             .ok_or_else(|| anyhow::anyhow!("check {n} must be a table (`[[check]]`)"))?;
 
+        // The writing methods share one shape: url + body + headers. `get`
+        // stays apart — a body on a GET is a mistake, not a feature.
+        const WRITE_METHODS: [(&str, &str); 4] = [
+            ("post", "POST"),
+            ("put", "PUT"),
+            ("patch", "PATCH"),
+            ("delete", "DELETE"),
+        ];
+        let write_method = WRITE_METHODS
+            .iter()
+            .find(|(k, _)| map.contains_key(*k))
+            .copied();
+
         if map.contains_key("get") {
             reject_unknown(
                 map,
                 n,
-                &["get", "expect", "contains", "timeout", "max_ms", "name"],
+                &[
+                    "get", "expect", "contains", "absent", "timeout", "max_ms", "name",
+                ],
             )?;
             checks.push(Check::Http {
                 method: "GET",
@@ -129,25 +146,28 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 headers: Vec::new(),
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
+                absent: str_list(map, "absent", n)?,
                 timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
                 max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
             });
-        } else if map.contains_key("post") {
+        } else if let Some((key, method)) = write_method {
             reject_unknown(
                 map,
                 n,
                 &[
-                    "post", "body", "headers", "expect", "contains", "timeout", "max_ms", "name",
+                    key, "body", "headers", "expect", "contains", "absent", "timeout", "max_ms",
+                    "name",
                 ],
             )?;
             checks.push(Check::Http {
-                method: "POST",
-                url: req_str(map, "post", n)?,
+                method,
+                url: req_str(map, key, n)?,
                 name: opt_str(map, "name", n)?,
                 body: opt_str(map, "body", n)?,
                 headers: str_map(map, "headers", n)?,
                 expect: opt_u16(map, "expect", n)?,
                 contains: str_list(map, "contains", n)?,
+                absent: str_list(map, "absent", n)?,
                 timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
                 max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
             });
@@ -215,7 +235,7 @@ pub fn parse(text: &str) -> Result<Vec<Check>> {
                 });
             }
         } else {
-            bail!("check {n} needs a 'run', 'get', 'post' or 'log' key");
+            bail!("check {n} needs a 'run', 'get', 'post', 'put', 'patch', 'delete' or 'log' key");
         }
     }
     Ok(checks)
@@ -425,7 +445,8 @@ mod tests {
     #[test]
     fn a_check_must_assert_something() {
         assert!(err("[[check]]\nlog = \"a\"").contains("at least one rule"));
-        assert!(err("[[check]]\nname = \"x\"").contains("needs a 'run', 'get', 'post' or 'log'"));
+        assert!(err("[[check]]\nname = \"x\"")
+            .contains("needs a 'run', 'get', 'post', 'put', 'patch', 'delete' or 'log'"));
         assert!(err("").contains("no checks"));
         assert!(err("check = []").contains("no checks"));
     }
@@ -444,6 +465,52 @@ mod tests {
             Check::Log { absent, .. } => assert_eq!(absent, &["ERROR"]),
             _ => panic!("expected a log check"),
         }
+    }
+
+    #[test]
+    fn every_write_method_shares_the_post_shape() {
+        let checks = parse(
+            r#"
+            [[check]]
+            put = "http://x"
+            body = "{}"
+            [[check]]
+            patch = "http://x"
+            headers = { authorization = "Bearer t" }
+            [[check]]
+            delete = "http://x"
+            expect = 204
+        "#,
+        )
+        .unwrap();
+        assert!(matches!(checks[0], Check::Http { method: "PUT", .. }));
+        assert!(matches!(
+            checks[1],
+            Check::Http {
+                method: "PATCH",
+                ..
+            }
+        ));
+        assert!(matches!(
+            checks[2],
+            Check::Http {
+                method: "DELETE",
+                expect: Some(204),
+                ..
+            }
+        ));
+        // a body on a GET stays a mistake, not a feature
+        assert!(err("[[check]]\nget = \"x\"\nbody = \"y\"").contains("unknown key 'body'"));
+    }
+
+    #[test]
+    fn absent_applies_to_an_http_body() {
+        let checks = parse("[[check]]\nget = \"http://x\"\nabsent = [\"gone\"]").unwrap();
+        match &checks[0] {
+            Check::Http { absent, .. } => assert_eq!(absent, &["gone"]),
+            _ => panic!("expected an http check"),
+        }
+        assert!(parse("[[check]]\ndelete = \"http://x\"\nabsent = [\"gone\"]").is_ok());
     }
 
     #[test]

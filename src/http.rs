@@ -85,7 +85,9 @@ pub fn request(
     for (k, v) in headers {
         extra.push_str(&format!("{k}: {v}\r\n"));
     }
-    if method == "POST" {
+    // Every method that may carry a body declares its length — an omitted
+    // Content-Length on a PUT/PATCH means the server never reads the body.
+    if method != "GET" {
         extra.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
     write!(

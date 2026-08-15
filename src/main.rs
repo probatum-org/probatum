@@ -160,6 +160,7 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   get = "<url>"                 HTTP GET; omitted expect = any 2xx
   expect = <code>               exact status
   contains = [".."]             body must contain
+  absent = [".."]               body must not contain (prove it is gone)
   timeout = <secs>              request deadline (default 5)
   max_ms = <ms>                 a correct but slower answer fails, with the
                                 measured time as evidence (timeout gives up,
@@ -169,6 +170,7 @@ config: a list of [[check]] tables. one check = one source + flat AND rules.
   post = "<url>"                HTTP POST; same rules as get, plus:
   body = "<string>"             request body (Content-Type defaults to
   headers = { k = "v" }         application/json when body is set)
+  put = / patch = / delete =    same shape as post, the method is the key
 
 cookies: Set-Cookie answers are kept in a per-host jar for the run and
 replayed on the later get/post checks — log in, then check what needed the
