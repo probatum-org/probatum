@@ -4,7 +4,10 @@
 [[check]]
 name = "chunked fixture is up"
 run = "python3 demo-app/tests/chunked_server.py 8094"
-background = true
+# probe it rather than `background`: the 500ms grace period lost a race on a
+# cold CI runner once (connection reset), and this fixture answers any path
+ready = "http://127.0.0.1:8094/healthz"
+timeout = 15
 
 [[check]]
 name = "contains works across a chunk boundary"
