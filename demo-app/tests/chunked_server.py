@@ -20,10 +20,20 @@ print(f"chunked fixture listening on 127.0.0.1:{PORT}", flush=True)
 
 while True:
     conn, _ = srv.accept()
-    conn.recv(4096)
+    # Read the whole request head before answering: closing with unread bytes
+    # in the socket makes the kernel send RST, and a client that has not read
+    # the answer yet sees "connection reset" — a flake seen on a slow CI runner.
+    req = b""
+    while b"\r\n\r\n" not in req:
+        chunk = conn.recv(4096)
+        if not chunk:
+            break
+        req += chunk
     conn.sendall(
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
         b"Transfer-Encoding: chunked\r\n\r\n"
         + f"{len(HEAD):x}\r\n{HEAD}\r\n{len(TAIL):x}\r\n{TAIL}\r\n0\r\n\r\n".encode()
     )
+    conn.shutdown(socket.SHUT_WR)  # FIN, not RST: let the client drain the answer
+    conn.recv(4096)  # wait for the client's close
     conn.close()
