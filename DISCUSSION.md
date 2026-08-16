@@ -324,6 +324,20 @@ real need `get:` + `run: curl` couldn't serve.)
   the project's chosen test context. Unlike cidx, it does not provision or
   replace that context by default. Its container image remains optional
   packaging; a future explicit container source requires a demonstrated need.
+- **2026-08-16 — releases through cidx, conventional commits adopted:** the
+  0.9.0 and 0.10.0 releases were cut by hand (tag + push, then the cidx tag
+  subflow) because `cidx release create` needs an `[actions.release-create]`
+  action, and cidx's model for it is commitizen: the bump computed from
+  conventional commits, written into declared version files. probatum's
+  "X.Y.Z: title" commit convention and Cargo.toml version did not fit. The
+  owner chose to adopt conventional commits rather than keep a manual flow —
+  commitizen is a stock cidx preset anyway. `.cz.toml` declares Cargo.toml as
+  a version file and rewrites Cargo.lock's probatum entry in a `pre_bump_hook`
+  (no cargo in the commitizen image; done before cz commits so the lock lands
+  in the bump commit and cz's tag stays on it — a `post_bump` amend was tried
+  first and left the tag on an orphan). CHANGELOG.md is now generated on bump.
+  Version is no longer bumped by hand. Verified on a scratch clone: one
+  `feat:` → 0.11.0, four files in one commit, tag on HEAD.
 - **2026-08-15 — the CRUD surface completed (0.10.0, issues #6 and #7):** two
   gaps from the same editor slice, both the "same check, missing where it's
   needed" kind. **#6**: `absent` existed on `run` and `log` but was rejected

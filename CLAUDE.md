@@ -31,6 +31,13 @@ are *caught* (exit 1 exactly).
   direction changes there (it's how sessions resume without context loss).
 - Before committing: `rm -rf .probatum/runs demo-app/data/app.log` (run
   artifacts are gitignored but keep the tree clean).
+- Commits follow conventional commits (`feat:`, `fix:`, `docs:`, `chore:`,
+  `refactor:`, `test:`; `!` or `BREAKING CHANGE:` for a breaking change).
+  commitizen checks them in CI (cidx `code` phase). Do NOT bump the version
+  by hand: `cidx release create` computes it from the commits since the last
+  tag, bumps Cargo.toml/Cargo.lock/.cz.toml + CHANGELOG.md through a PR, tags
+  the merged commit, and release.yml publishes. Then bump the image tag in
+  `.cidx/presets.toml`.
 
 ## Design guardrails (frozen — see DISCUSSION.md for the why)
 

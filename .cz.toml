@@ -1,0 +1,16 @@
+# Release automation — `cidx release create` runs `cz bump` in a container:
+# it reads the conventional commits since the last tag, computes the bump,
+# rewrites the version below, in Cargo.toml and in Cargo.lock's probatum
+# entry (the hook — no cargo in the container), commits, and cidx tags the
+# merged commit, which triggers release.yml.
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.10.0"
+tag_format = "v$version"
+version_files = ["Cargo.toml:^version", ".cz.toml:^version"]
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"
+changelog_incremental = true
+# Cargo.lock has one version line per crate — the hook rewrites only ours,
+# before cz commits, so the lock lands in the bump commit.
+pre_bump_hooks = ["sh -c 'sed -i \"/^name = \\\"probatum\\\"$/{n;s/^version = .*/version = \\\"$CZ_PRE_NEW_VERSION\\\"/}\" Cargo.lock'"]

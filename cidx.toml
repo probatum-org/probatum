@@ -10,7 +10,7 @@
 containers = ["trivy", "gitleaks", "cargo-audit"]
 
 [code]
-containers = ["clippy", "rustfmt"]
+containers = ["clippy", "rustfmt", "commitizen"]
 
 [test]
 containers = ["cargo-test", "probatum"]
@@ -23,3 +23,26 @@ phases = ["security", "code", "test", "build"]
 
 [pipelines.pr]
 phases = ["security", "code", "test"]
+
+# ─── conventional commits + `cidx release create` ────────────────────────────
+# Since 0.10.0 commits follow conventional commits (feat/fix/docs/chore…): the
+# preset validates them in CI, and the release-create action lets commitizen
+# compute the bump from them — version files and Cargo.lock are declared in
+# .cz.toml. The bump travels through a PR; cidx tags the merged commit and
+# release.yml publishes (binary, image, GitHub release).
+[actions.release-create]
+description = "Create new release with version bump"
+image = "commitizen/commitizen:4.16.5"
+command = "bump --yes --no-verify"
+workdir = "/app"
+volumes = [
+    "${WORKSPACE}:/app",
+    "${WORKSPACE}/.git:/app/.git",
+]
+watch_workflow = true
+
+[actions.release-create.env]
+GIT_CONFIG_GLOBAL = "/tmp/.gitconfig"
+GIT_CONFIG_COUNT = "1"
+GIT_CONFIG_KEY_0 = "safe.directory"
+GIT_CONFIG_VALUE_0 = "/app"
