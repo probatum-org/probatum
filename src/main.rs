@@ -204,6 +204,9 @@ One check = one source + flat AND rules.
   max_ms = <ms>                 a correct but slower answer fails, with the
                                 measured time as evidence (timeout gives up,
                                 max_ms judges what it saw)
+  min_ms = <ms>                 a correct but faster answer fails: for work
+                                that is expensive on purpose (a password
+                                hash). with max_ms it bounds a band
 
   [[check]]
   post = "<url>"                HTTP POST; same rules as get, plus:

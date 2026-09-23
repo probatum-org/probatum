@@ -166,7 +166,8 @@ checks that follow — no config needed (an explicit `Cookie` header wins). Rule
 (must appear), `absent`
 (must not appear), `timeout` (how long to wait — command deadline, request
 deadline, or readiness deadline), `max_ms` (a correct answer that arrives
-too late still fails), `background` (keep a service running with no probe),
+too late still fails), `min_ms` (one that arrives too early fails too — for
+work that is expensive on purpose, such as a password hash), `background` (keep a service running with no probe),
 `allow` (exempt lines from the service crash filter), `name` (display
 label). Unknown keys are rejected, and so is a rule of the
 wrong type — a typo must never silently skip a check, and a dropped rule is a
@@ -344,7 +345,10 @@ are outside this evidence policy.
   up and never sees the answer; `max_ms` saw a correct answer and judges how
   long it took, with the measured number as evidence. Keep budgets generous:
   a single measurement is noisy, and a flaky red check is worse than no
-  check.
+  check. `min_ms` is the mirror, for endpoints that must stay expensive (a
+  password hash swapped for a string compare keeps the same answer and only
+  gets faster). A floor is the sturdier bound: noise makes a measurement
+  slower, almost never faster. `min_ms` above `max_ms` is a config error.
 
 - **One document per outcome** — with `--json`, every outcome that returns
   through main prints exactly one schema-valid document on stdout (human text

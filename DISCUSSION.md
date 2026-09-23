@@ -551,6 +551,20 @@ config is still verbatim, including literal credentials. Application-owned files
 are outside this policy. A future finer-grained redaction mechanism would need
 to preserve these guarantees.
 
+### `min_ms` (2026-09-23, issue #8)
+
+The mirror of `max_ms`. The case: a login verifying an Argon2 hash, ~336ms per
+wrong password by design. A refactor swapping the hash for a string compare
+keeps every functional check green (same 401, same body); the only symptom is
+an endpoint two orders of magnitude faster. `run` cannot stand in: the image
+has no curl, and BusyBox `date` has no `%N`. Admitted as one comparison
+against a number already measured and reported: a correct answer faster than
+the floor fails with the measured time as evidence ("took only 0ms, under the
+500ms floor"). With `max_ms` it states a band ("expensive on purpose, not
+pathological"); an empty band (`min_ms > max_ms`) is a config error, never a
+check that cannot pass. Unlike a budget, a floor is robust to noise — cold
+caches and first connects make a measurement slower, almost never faster.
+
 ### Steps are declared in order (2026-09-23)
 
 Numbered steps used to run in numeric order whatever their declaration order,

@@ -1,0 +1,15 @@
+# Negative scenario (issue #8): the endpoint answers 200 correctly but in
+# ~1ms. A 500ms floor must fail it — the regression "the password hash got
+# replaced by a string compare" looks exactly like this: same answer, far too
+# fast. Used inverted by the root probatum.toml (expects exit 1). Margins are
+# wide on purpose (1ms vs 500ms), as for max_ms.
+[[check]]
+name = "app boots"
+run = "python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15
+
+[[check]]
+name = "a deliberately expensive endpoint must not become cheap"
+get = "http://127.0.0.1:8087/healthz"
+min_ms = 500

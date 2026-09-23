@@ -20,7 +20,7 @@ contains = ["test result: ok."]
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init", "--scenario", "os =", "no_applicable_checks", "not_selected", "os_mismatch", "previous_failure", "capture =", "env =", "dependency_unavailable", "output_withheld"]
+contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "min_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init", "--scenario", "os =", "no_applicable_checks", "not_selected", "os_mismatch", "previous_failure", "capture =", "env =", "dependency_unavailable", "output_withheld"]
 
 # the full demo flow (service + http + external log) must be green
 [[check]]
@@ -105,6 +105,14 @@ timeout = 30
 name = "over-budget latency is caught"
 run = "./target/debug/probatum run .probatum/too-slow.toml"
 expect = 1
+timeout = 30
+
+# the mirror: a correct answer that arrives too fast is a failure (issue #8)
+[[check]]
+name = "under-floor latency is caught"
+run = "./target/debug/probatum run .probatum/too-fast.toml"
+expect = 1
+contains = ["under the 500ms floor"]
 timeout = 30
 
 # the machine contract: --json must carry the verdict, the schema version and

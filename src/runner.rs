@@ -396,6 +396,7 @@ fn run_scenario(
                 absent,
                 timeout_secs,
                 max_ms,
+                min_ms,
                 ..
             } => run_http(
                 method,
@@ -406,7 +407,7 @@ fn run_scenario(
                 contains,
                 absent,
                 *timeout_secs,
-                *max_ms,
+                (*min_ms, *max_ms),
                 &log_file,
                 check,
                 &mut jar,
@@ -845,7 +846,7 @@ fn run_http(
     contains: &[String],
     absent: &[String],
     timeout_secs: u64,
-    max_ms: Option<u128>,
+    (min_ms, max_ms): (Option<u128>, Option<u128>),
     log_file: &Evidence,
     check: &Check,
     jar: &mut HashMap<String, Vec<(String, String)>>,
@@ -957,6 +958,26 @@ fn run_http(
                         Some(Cause {
                             headline: format!(
                                 "HTTP {} was correct but took {elapsed_ms}ms, over the {budget}ms budget",
+                                resp.status
+                            ),
+                            correlated: Vec::new(),
+                        }),
+                    );
+                }
+            }
+            // The mirror: correct, but too fast for something meant to be
+            // expensive. Noise makes a measurement slower, almost never
+            // faster, so a floor is the sturdier of the two bounds.
+            if let Some(floor) = min_ms {
+                if elapsed_ms < floor {
+                    return report(
+                        check,
+                        log_file,
+                        Status::Failed,
+                        Some(format!("{elapsed_ms}ms (min {floor}ms)")),
+                        Some(Cause {
+                            headline: format!(
+                                "HTTP {} was correct but took only {elapsed_ms}ms, under the {floor}ms floor",
                                 resp.status
                             ),
                             correlated: Vec::new(),

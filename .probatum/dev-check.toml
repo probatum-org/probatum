@@ -38,6 +38,13 @@ name = "version endpoint answers quickly"
 get = "http://127.0.0.1:8087/api/version"
 max_ms = 2000
 
+# expensive on purpose, but not pathological: a band (issue #8), wide margins
+[[check]]
+name = "slow-by-design endpoint stays within its band"
+get = "http://127.0.0.1:8087/api/slow"
+min_ms = 500
+max_ms = 10000
+
 [[check]]
 name = "the stored event is visible"
 get = "http://127.0.0.1:8087/api/version"

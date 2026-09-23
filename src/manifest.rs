@@ -132,6 +132,10 @@ pub enum Check {
         /// from `timeout`: this one *observed* a correct answer and fails on
         /// how long it took, with the measured number as evidence.
         max_ms: Option<u128>,
+        /// `min_ms` — the correct answer must take at least N milliseconds:
+        /// fails an endpoint that is deliberately expensive (a password hash)
+        /// and suddenly is not.
+        min_ms: Option<u128>,
     },
     /// `log` — evaluated from scenario start (offset noted before its checks).
     /// At least one rule is required: a check without rules asserts nothing.
@@ -319,12 +323,14 @@ fn parse_check(map: &Table, n: usize) -> Result<Check> {
         .find(|(k, _)| map.contains_key(*k))
         .copied();
 
+    let (min_ms, max_ms) = time_band(map, n)?;
     if map.contains_key("get") {
         reject_unknown(
             map,
             n,
             &[
-                "get", "headers", "expect", "contains", "absent", "timeout", "max_ms", "name",
+                "get", "headers", "expect", "contains", "absent", "timeout", "max_ms", "min_ms",
+                "name",
             ],
         )?;
         Ok(Check::Http {
@@ -337,14 +343,16 @@ fn parse_check(map: &Table, n: usize) -> Result<Check> {
             contains: str_list(map, "contains", n)?,
             absent: str_list(map, "absent", n)?,
             timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
-            max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
+            max_ms,
+            min_ms,
         })
     } else if let Some((key, method)) = write_method {
         reject_unknown(
             map,
             n,
             &[
-                key, "body", "headers", "expect", "contains", "absent", "timeout", "max_ms", "name",
+                key, "body", "headers", "expect", "contains", "absent", "timeout", "max_ms",
+                "min_ms", "name",
             ],
         )?;
         Ok(Check::Http {
@@ -357,7 +365,8 @@ fn parse_check(map: &Table, n: usize) -> Result<Check> {
             contains: str_list(map, "contains", n)?,
             absent: str_list(map, "absent", n)?,
             timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
-            max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
+            max_ms,
+            min_ms,
         })
     } else if map.contains_key("log") {
         reject_unknown(map, n, &["log", "contains", "absent", "name"])?;
@@ -426,6 +435,19 @@ fn parse_check(map: &Table, n: usize) -> Result<Check> {
     } else {
         bail!("check {n} needs a 'run', 'get', 'post', 'put', 'patch', 'delete' or 'log' key");
     }
+}
+
+/// `min_ms`/`max_ms` together: an empty band is a config error, not a check
+/// that can never pass.
+fn time_band(map: &Table, n: usize) -> Result<(Option<u128>, Option<u128>)> {
+    let min = opt_u64(map, "min_ms", n)?.map(u128::from);
+    let max = opt_u64(map, "max_ms", n)?.map(u128::from);
+    if let (Some(lo), Some(hi)) = (min, max) {
+        if lo > hi {
+            bail!("check {n}: min_ms = {lo} is above max_ms = {hi} — no answer could pass");
+        }
+    }
+    Ok((min, max))
 }
 
 fn req_str(map: &Table, key: &str, n: usize) -> Result<String> {
@@ -729,6 +751,31 @@ mod tests {
     }
 
     #[test]
+    fn a_time_band_bounds_both_sides() {
+        for method in ["get", "post", "put", "patch", "delete"] {
+            let checks = parsed_checks(&format!(
+                "[[check]]\n{method} = \"http://x\"\nmin_ms = 20\nmax_ms = 2000"
+            ))
+            .unwrap();
+            assert!(matches!(
+                checks[0],
+                Check::Http {
+                    min_ms: Some(20),
+                    max_ms: Some(2000),
+                    ..
+                }
+            ));
+        }
+        assert!(parsed_checks("[[check]]\nget = \"http://x\"\nmin_ms = 20").is_ok());
+        assert!(
+            err("[[check]]\nget = \"http://x\"\nmin_ms = 50\nmax_ms = 10")
+                .contains("min_ms = 50 is above max_ms = 10")
+        );
+        assert!(err("[[check]]\nget = \"http://x\"\nmin_ms = \"20\"").contains("positive integer"));
+        assert!(err("[[check]]\nrun = \"x\"\nmin_ms = 20").contains("unknown key 'min_ms'"));
+    }
+
+    #[test]
     fn defaults_match_the_documented_contract() {
         let checks = parsed_checks("[[check]]\nget = \"http://x\"").unwrap();
         match &checks[0] {
@@ -737,11 +784,12 @@ mod tests {
                 expect,
                 timeout_secs,
                 max_ms,
+                min_ms,
                 ..
             } => {
                 assert!(expect.is_none());
                 assert_eq!(*timeout_secs, 5);
-                assert!(max_ms.is_none());
+                assert!(max_ms.is_none() && min_ms.is_none());
             }
             _ => panic!("expected an http check"),
         }
