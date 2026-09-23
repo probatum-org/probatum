@@ -7,6 +7,7 @@ Exactly the class of failure Probatum exists to surface.
 """
 import json
 import os
+import secrets
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -17,8 +18,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 #   LOG_FILE=path         -> also append log lines to an external file (log: checks)
 #   HANG=1                -> boot fine but never open the port (readiness timeout)
 #   AUTH=1                -> POST /api/events requires the session cookie from /auth/login
+#   BEARER=1              -> login also issues a bearer for /auth/profile and /auth/permissions
 WAL_DIR = os.environ.get("WAL_DIR") or os.path.join(os.path.dirname(__file__), "data", "wal")
 SEGMENTS = ["0001", "0002", "0003", "0004"]
+BEARERS = set()
+LOGIN_COUNT = 0
 
 
 def log(level, msg):
@@ -49,7 +53,16 @@ def replay_wal():
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/healthz":
+        if self.path in ("/auth/profile", "/auth/permissions"):
+            authorization = self.headers.get("Authorization", "")
+            token = authorization[7:] if authorization.startswith("Bearer ") else ""
+            if not os.environ.get("BEARER") or token not in BEARERS:
+                self._reply(401, {"error": "bearer required"})
+            else:
+                # Echo the bearer to verify that captured response data stays private.
+                self._reply(200, {"bearer": token, "login_count": LOGIN_COUNT,
+                                  "profile": "editor", "permissions": ["read", "write"]})
+        elif self.path == "/healthz":
             self._reply(200, {"status": "ok"})
         elif self.path == "/api/version":
             self._reply(200, {"version": "1.3.0", "keys": len(STATE)})
@@ -63,6 +76,7 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "not found"})
 
     def do_POST(self):
+        global LOGIN_COUNT
         if self.path == "/auth/login":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -71,8 +85,14 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 ok = False
             if ok:
+                LOGIN_COUNT += 1
                 log("INFO", "auth login ok, session issued")
-                self._reply(200, {"token": "letmein42"}, cookie="session=letmein42; Path=/")
+                response = {"token": "letmein42"}
+                if os.environ.get("BEARER"):
+                    token = secrets.token_urlsafe(24)
+                    BEARERS.add(token)
+                    response["access_token"] = token
+                self._reply(200, response, cookie="session=letmein42; Path=/")
             else:
                 self._reply(401, {"error": "bad credentials"})
         elif self.path == "/api/events":
@@ -121,7 +141,11 @@ class Handler(BaseHTTPRequestHandler):
             self._reply(404, {"error": "not found"})
 
     def _authed(self):
-        return not os.environ.get("AUTH") or "session=letmein42" in self.headers.get("Cookie", "")
+        authorization = self.headers.get("Authorization", "")
+        bearer = (os.environ.get("BEARER") and authorization.startswith("Bearer ")
+                  and authorization[7:] in BEARERS)
+        return (not os.environ.get("AUTH")
+                or "session=letmein42" in self.headers.get("Cookie", "") or bearer)
 
     def _reply(self, code, obj, cookie=None):
         body = b"" if obj is None else json.dumps(obj).encode()

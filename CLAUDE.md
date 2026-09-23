@@ -1,7 +1,7 @@
 # probatum
 
 Test-oriented check runner: one `probatum.toml`, embedded checks (run/get/post/log),
-only the failures that matter. Rust, ~1k lines, offline-buildable.
+only the failures that matter. Rust, offline-buildable.
 
 ## Dogfooding — the rule of this repo
 
@@ -41,8 +41,29 @@ are *caught* (exit 1 exactly).
 
 ## Design guardrails (frozen — see DISCUSSION.md for the why)
 
-- A check = one source (`run` / `get` / `log`) + flat AND rules. No OR, no
-  nesting, no logic in the config — the day it needs an `if`, the design failed.
+- A check = one source (`run` / an HTTP method / `log`) + flat AND rules. No OR,
+  no nesting, no logic in the config — the day it needs an `if`, the design
+  failed. Capture references are the one sanctioned dependency (see below).
+- Named scenarios put one operation and optional `os` directly in `[auth]`.
+  Several operations use `[auth.1]`, `[auth.2]`, etc., with scope on `[auth]`.
+  Step numbers are positive, ordered numerically, may have gaps, and have no
+  leading zeros. Do not mix direct/numbered operations or add a `check` wrapper.
+  `--scenario NAME` selects one plus capture prerequisites; legacy root checks
+  remain scenario `default`.
+  Validate the whole file before filtering; keep OS scope a fixed criterion.
+  Each scenario owns its services, cookies and log baseline. Keep global
+  fail-fast; distinguish exclusions and dependency/failure skips in JSON schema 4.
+  Nothing applicable means exit 2 (`no_applicable_checks`), never a green empty run.
+- Named captures expose stdout or HTTP JSON scalars; references infer prerequisites
+  executed once per invocation. Validate references/cycles before filtering and
+  respect OS scope. An unavailable capture prevents a green consumer verdict.
+  Pass command values through `env`, never shell-source substitution. Captures
+  are sensitive: withhold what the system under test said (bodies, output, log
+  excerpts, `cause`) for producer and consumer scenarios, even on failure, panic
+  and signals — but keep probatum's own `detail`, with captured values replaced
+  by `[redacted]`: a masked failure must still say what went wrong. Reports
+  expose names only; frozen config stays verbatim. This adds no expressions or
+  shared service lifetimes: a service dies with its scenario.
 - New verb/rule admission test: *one operation, one observable result, flat
   pass/fail rules* — and only against a real, recurring need.
 - failed (exit 1) ≠ couldn't-run (exit 2). Never conflate them: a false

@@ -4,13 +4,14 @@
 //! Semantics frozen with the owner (see DISCUSSION.md):
 //! - failed ≠ couldn't-run: a bad result is not the same as "couldn't observe";
 //! - stop at the first failed/errored check, the rest is skipped (no cascade noise);
-//! - external logs are read from run start (offset noted before any check runs);
+//! - external logs are read from scenario start (before its checks run);
 //!   replacement/truncation during the window is ambiguous → couldn't-run;
 //! - a port that already answers before we start our service = dirty environment.
 
 use crate::capture::{self, CapturedLogs, LogLine};
 use crate::diagnose::{self, Cause};
-use crate::manifest::Check;
+use crate::manifest::{Check, Manifest, Scenario, ScopedCheck};
+use crate::values::{self, Plan, Store};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::os::unix::fs::MetadataExt;
@@ -21,13 +22,27 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub enum Status {
     Passed,
-    Failed,  // it ran and gave a bad result
-    Errored, // it couldn't run or couldn't observe (missing binary, dirty env, rotated log)
-    Skipped, // not executed: an earlier check already failed
+    Failed,   // it ran and gave a bad result
+    Errored,  // it couldn't run or couldn't observe (missing binary, dirty env, rotated log)
+    Skipped,  // not executed: an earlier check already failed
+    Excluded, // not selected or outside the current OS scope
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NonExecutionReason {
+    NotSelected,
+    OsMismatch,
+    PreviousFailure,
+    DependencyUnavailable,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CheckReport {
+    pub scenario: String,
+    pub step: Option<usize>,
+    pub captures: Vec<String>,
+    pub output_withheld: bool,
     pub label: String,
     pub status: Status,
     /// How long the check took. Recorded for every check so a reader (or an
@@ -36,7 +51,8 @@ pub struct CheckReport {
     pub duration_ms: u128,
     pub detail: Option<String>,
     pub cause: Option<Cause>,
-    pub log_file: String,
+    pub log_file: Option<String>,
+    pub reason: Option<NonExecutionReason>,
 }
 
 /// The run half of the outcome document. `schema` and `verdict` live on the
@@ -49,6 +65,12 @@ pub struct RunReport {
     pub failed: usize,
     pub errored: usize,
     pub skipped: usize,
+    pub executed: usize,
+    pub excluded: usize,
+    pub host_os: String,
+    pub selected_scenario: Option<String>,
+    pub prerequisites: Vec<String>,
+    pub reason: Option<&'static str>,
     pub source: String,
     pub run_dir: String,
     pub seed: u32,
@@ -76,52 +98,254 @@ struct Service {
     contains: Vec<String>,
     absent: Vec<String>,
     allow: Vec<String>,
+    handles: Vec<std::thread::JoinHandle<()>>,
 }
 
-/// (inode, size) of a log file at run start; None = the file did not exist yet.
+/// (inode, size) at scenario start; None = the file did not exist yet.
 type LogBaseline = Option<(u64, u64)>;
 
-pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Result<RunReport> {
-    // Safety net: if this function exits ANY way (return, ?, panic unwinding),
-    // every registered process group gets killed. The explicit teardown below
-    // stays as the controlled path; this guard is the last line of defense.
-    let _own_guard = crate::own::Guard;
+struct Evidence {
+    path: PathBuf,
+    private: bool,
+}
 
+impl Evidence {
+    fn write(&self, content: impl AsRef<[u8]>) {
+        let bytes = if self.private {
+            capture::WITHHELD.as_bytes()
+        } else {
+            content.as_ref()
+        };
+        let _ = std::fs::write(&self.path, bytes);
+    }
+}
+
+#[derive(Default)]
+struct RunState {
+    out: Vec<CheckReport>,
+    halted: bool,
+    values: Store,
+}
+
+pub fn run(
+    manifest: &Manifest,
+    config_text: &str,
+    source: &str,
+    seed: u32,
+    selected: Option<&str>,
+    plan: &Plan,
+) -> Result<RunReport> {
     let run_dir = next_run_dir()?;
     let frozen = run_dir.join("config.toml");
-    std::fs::write(&frozen, config_text).ok();
+    std::fs::write(&frozen, config_text).context("write frozen config")?;
+    let host_os = std::env::consts::OS;
+    let (order, included) = plan.execution(manifest, selected, host_os);
+    let prerequisites = order
+        .iter()
+        .filter(|&&i| {
+            included[i] && selected.is_some_and(|name| name != manifest.scenarios[i].name)
+        })
+        .map(|&i| manifest.scenarios[i].name.clone())
+        .collect();
+    let mut state = RunState::default();
+    for i in order {
+        run_scenario(
+            &manifest.scenarios[i],
+            i,
+            &run_dir,
+            host_os,
+            included[i],
+            plan,
+            &mut state,
+        );
+    }
+    let out = state.out;
 
-    // Note every log file's offset BEFORE any check runs: only lines written
-    // during this run count. Pre-existing content is normal, not dirty.
-    let mut baselines: HashMap<String, LogBaseline> = HashMap::new();
-    for check in checks {
-        if let Check::Log { path, .. } = check {
-            let b = std::fs::metadata(path).ok().map(|m| (m.ino(), m.size()));
-            baselines.insert(path.clone(), b);
+    let failed = out.iter().filter(|c| c.status == Status::Failed).count();
+    let errored = out.iter().filter(|c| c.status == Status::Errored).count();
+    let skipped = out.iter().filter(|c| c.status == Status::Skipped).count();
+    let excluded = out.iter().filter(|c| c.status == Status::Excluded).count();
+    let executed = out.len() - skipped - excluded;
+    let blocked = out
+        .iter()
+        .any(|c| c.reason == Some(NonExecutionReason::DependencyUnavailable));
+    let verdict = if failed > 0 {
+        "fail"
+    } else if errored > 0 || executed == 0 || blocked {
+        "couldn't-run"
+    } else {
+        "pass"
+    };
+    let mut replay = format!(
+        "probatum run {} --seed {seed}",
+        shell_quote(&frozen.display().to_string())
+    );
+    if let Some(name) = selected {
+        replay.push_str(&format!(" --scenario {}", shell_quote(name)));
+    }
+    Ok(RunReport {
+        verdict: verdict.into(),
+        failed,
+        errored,
+        skipped,
+        executed,
+        excluded,
+        host_os: host_os.into(),
+        selected_scenario: selected.map(String::from),
+        prerequisites,
+        reason: if blocked {
+            Some("dependency_unavailable")
+        } else {
+            (executed == 0).then_some("no_applicable_checks")
+        },
+        source: source.to_string(),
+        run_dir: run_dir.display().to_string(),
+        seed,
+        checks: out,
+        replay,
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn exclusion(
+    scenario: &Scenario,
+    scoped: &ScopedCheck,
+    included: bool,
+    host_os: &str,
+) -> Option<(NonExecutionReason, String)> {
+    if !included {
+        return Some((
+            NonExecutionReason::NotSelected,
+            "not selected or required as a prerequisite".into(),
+        ));
+    }
+    if let Some(os) = scenario.os.or(scoped.os) {
+        if !os.matches(host_os) {
+            return Some((
+                NonExecutionReason::OsMismatch,
+                format!(
+                    "out of scope: requires {}, running on {host_os}",
+                    os.as_str()
+                ),
+            ));
         }
     }
+    None
+}
 
-    let mut services: Vec<Service> = Vec::new();
-    let mut out: Vec<CheckReport> = Vec::new();
-    let mut halted = false;
-    // Cookie jar for the run, per host: what a check's response sets, the later
-    // http checks replay — log in, then check what needed the login (issue #5).
-    let mut jar: HashMap<String, Vec<(String, String)>> = HashMap::new();
+fn not_run(
+    scenario: &Scenario,
+    check: &Check,
+    status: Status,
+    reason: NonExecutionReason,
+    detail: String,
+) -> CheckReport {
+    CheckReport {
+        scenario: scenario.name.clone(),
+        step: None,
+        captures: Vec::new(),
+        output_withheld: false,
+        label: check.label(),
+        status,
+        duration_ms: 0,
+        detail: Some(detail),
+        cause: None,
+        log_file: None,
+        reason: Some(reason),
+    }
+}
 
-    for (i, check) in checks.iter().enumerate() {
-        let log_file = run_dir.join(format!("check-{}.log", i + 1));
-        if halted {
-            out.push(CheckReport {
-                label: check.label(),
-                status: Status::Skipped,
-                duration_ms: 0,
-                detail: None,
-                cause: None,
-                log_file: log_file.display().to_string(),
-            });
+fn run_scenario(
+    scenario: &Scenario,
+    scenario_index: usize,
+    run_dir: &Path,
+    host_os: &str,
+    included: bool,
+    plan: &Plan,
+    state: &mut RunState,
+) {
+    let RunState {
+        out,
+        halted,
+        values,
+    } = state;
+    let private = plan.sensitive[scenario_index];
+    let _own_guard = crate::own::Guard;
+    let exclusions: Vec<_> = scenario
+        .checks
+        .iter()
+        .map(|c| exclusion(scenario, c, included, host_os))
+        .collect();
+    // A fresh observation window, before any applicable check in this scenario.
+    // Excluded targets are never touched, even for baseline collection.
+    let mut baselines: HashMap<String, LogBaseline> = HashMap::new();
+    if !*halted {
+        for (scoped, excluded) in scenario.checks.iter().zip(&exclusions) {
+            if excluded.is_none() {
+                if let Check::Log { path, .. } = &scoped.check {
+                    let b = std::fs::metadata(path).ok().map(|m| (m.ino(), m.size()));
+                    baselines.insert(path.clone(), b);
+                }
+            }
+        }
+    }
+    let mut services = Vec::new();
+    let mut jar = HashMap::new();
+    let first_report = out.len();
+    let mut executed = false;
+    for (check_index, (scoped, excluded)) in scenario.checks.iter().zip(exclusions).enumerate() {
+        let check = &scoped.check;
+        if let Some((reason, detail)) = excluded {
+            out.push(not_run(scenario, check, Status::Excluded, reason, detail));
             continue;
         }
+        if *halted {
+            out.push(not_run(
+                scenario,
+                check,
+                Status::Skipped,
+                NonExecutionReason::PreviousFailure,
+                "skipped after an earlier failure or error".into(),
+            ));
+            continue;
+        }
+        if let Some(missing) = plan.references[scenario_index][check_index]
+            .iter()
+            .find(|key| !values.contains_key(*key))
+        {
+            out.push(not_run(
+                scenario,
+                check,
+                Status::Skipped,
+                NonExecutionReason::DependencyUnavailable,
+                format!("required capture {missing:?} is unavailable"),
+            ));
+            continue;
+        }
+        executed = true;
+        let log_file = Evidence {
+            path: run_dir.join(format!("check-{}.log", out.len() + 1)),
+            private,
+        };
         let check_started = Instant::now();
+        let (resolved, env) = match values::resolve(scoped, values) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let mut report = errored(check, &log_file, error.to_string());
+                report.scenario = scenario.name.clone();
+                report.step = scoped.step;
+                report.output_withheld = private;
+                out.push(report);
+                *halted = true;
+                continue;
+            }
+        };
+        let check = &resolved;
+        let mut captured = None;
+        let output = (!scoped.captures.is_empty()).then_some(&mut captured);
         let report = match check {
             Check::Run {
                 cmd,
@@ -138,6 +362,8 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 *expect,
                 &log_file,
                 check,
+                &env,
+                output,
             ),
             Check::Service {
                 cmd,
@@ -158,6 +384,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 check,
                 out.len(),
                 &mut services,
+                &env,
             ),
             Check::Http {
                 method,
@@ -183,6 +410,7 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
                 &log_file,
                 check,
                 &mut jar,
+                output,
             ),
             Check::Log {
                 path,
@@ -199,70 +427,153 @@ pub fn run(checks: &[Check], config_text: &str, source: &str, seed: u32) -> Resu
             ),
         };
         let mut report = report;
+        report.label = scoped.check.label(); // Keep references, never expanded secrets.
+        if report.status == Status::Passed && !scoped.captures.is_empty() {
+            match captured.unwrap_or_else(|| Err(anyhow::anyhow!("capture output unavailable"))) {
+                Err(error) => {
+                    report.status = Status::Errored;
+                    report.detail = Some(error.to_string());
+                }
+                Ok(output) => match values::extract(&scoped.captures, &output) {
+                    Err(error) => {
+                        report.status = Status::Failed;
+                        report.detail = Some(error.to_string());
+                    }
+                    Ok(captures) => {
+                        for (name, value) in captures {
+                            values.insert(values::key(&scenario.name, scoped.step, &name), value);
+                            report.captures.push(name);
+                        }
+                    }
+                },
+            }
+        }
+        if private {
+            withhold_output(&mut report, check, values); // after extraction: its values are known
+        }
+        report.scenario = scenario.name.clone();
+        report.step = scoped.step;
         report.duration_ms = check_started.elapsed().as_millis();
-        if report.status == Status::Failed || report.status == Status::Errored {
-            halted = true;
+        if matches!(report.status, Status::Failed | Status::Errored) {
+            *halted = true;
         }
         out.push(report);
     }
-
-    // ponytail: test hook — proves the ownership guard on probatum's own crash
-    // path (services are alive right here). Not a user feature.
-    if std::env::var_os("PROBATUM_TEST_PANIC").is_some() {
+    if executed && std::env::var_os("PROBATUM_TEST_PANIC").is_some() {
         panic!("PROBATUM_TEST_PANIC");
     }
+    finish_services(services, out);
+    for (report, scoped) in out[first_report..].iter_mut().zip(&scenario.checks) {
+        report.step = scoped.step;
+        report.output_withheld =
+            private && !matches!(report.status, Status::Skipped | Status::Excluded);
+        // Service verdicts may change during teardown. Their causes remain private.
+        if private && matches!(scoped.check, Check::Service { .. }) {
+            withhold_output(report, &scoped.check, values);
+        }
+    }
+    *halted |= out[first_report..]
+        .iter()
+        .any(|r| matches!(r.status, Status::Failed | Status::Errored));
+}
 
-    // A service can misbehave after it became ready — scan every tracked
-    // service's full output before the verdict.
-    for svc in &services {
-        if out[svc.report_index].status != Status::Passed {
+/// In a scenario that captures or consumes values, what the system under test
+/// said stays private: the cause (body/log excerpts) and a command's output
+/// summary are dropped, and evidence files are withheld at the source. The
+/// detail probatum wrote itself — status, network error, the rule that did not
+/// hold — is kept, with every captured value replaced, so a failure still says
+/// what went wrong.
+fn withhold_output(report: &mut CheckReport, check: &Check, values: &Store) {
+    if matches!(report.status, Status::Skipped | Status::Excluded) {
+        return;
+    }
+    report.cause = None;
+    report.output_withheld = true;
+    if report.status == Status::Passed && matches!(check, Check::Run { .. }) {
+        report.detail = None; // the summary is a line of the command's own output
+    }
+    if let Some(detail) = &mut report.detail {
+        *detail = redact(detail, values);
+    }
+}
+
+/// Replace every captured value's text in a probatum-authored message.
+fn redact(text: &str, values: &Store) -> String {
+    let mut secrets: Vec<String> = values
+        .values()
+        .map(|v| match v {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        // ponytail: values under 4 chars (a count, a flag) are left alone —
+        // redacting "2" would shred "HTTP 201 in 2ms"; a real credential is
+        // never that short. Tighten if short secrets ever appear.
+        .filter(|s| s.chars().count() >= 4)
+        .collect();
+    secrets.sort_by_key(|s| std::cmp::Reverse(s.len())); // longest first: no partial overlap
+    let mut out = text.to_string();
+    for secret in &secrets {
+        out = out.replace(secret.as_str(), "[redacted]");
+    }
+    out
+}
+
+fn kill_group(child: &mut Child) {
+    signal_group(child);
+    let _ = child.wait();
+    crate::own::unregister(child.id());
+}
+
+fn signal_group(child: &mut Child) {
+    unsafe {
+        libc::kill(-(child.id() as i32), libc::SIGKILL);
+    }
+    let _ = child.kill();
+}
+
+fn finish_services(mut services: Vec<Service>, out: &mut [CheckReport]) {
+    // Inspect all services before any teardown; stopping one service can cause
+    // another to exit. An already-dead service is a failure even without logs.
+    let statuses: Vec<_> = services.iter_mut().map(|s| s.child.try_wait()).collect();
+    for svc in &mut services {
+        signal_group(&mut svc.child);
+    }
+    for (mut svc, status) in services.into_iter().zip(statuses) {
+        let _ = svc.child.wait();
+        crate::own::unregister(svc.child.id());
+        for handle in svc.handles {
+            let _ = handle.join();
+        }
+        let r = &mut out[svc.report_index];
+        if r.status != Status::Passed {
             continue;
         }
         let lines = svc.logs.snapshot();
-        if let Some(cause) = scan_lines(&lines, &svc.absent, &svc.allow, true) {
-            out[svc.report_index].status = Status::Failed;
-            out[svc.report_index].detail = Some("error in logs".into());
-            out[svc.report_index].cause = Some(cause);
-        } else if let Some(missing) = find_missing(&lines, &svc.contains) {
-            out[svc.report_index].status = Status::Failed;
-            out[svc.report_index].detail = Some(format!("output missing \"{missing}\""));
+        match status {
+            Ok(Some(status)) => {
+                r.status = Status::Failed;
+                r.detail = Some(format!(
+                    "service exited after startup ({})",
+                    fmt_status(&status)
+                ));
+                r.cause = diagnose::from_logs(&lines);
+            }
+            Err(e) => {
+                r.status = Status::Errored;
+                r.detail = Some(format!("couldn't observe service: {e}"));
+            }
+            Ok(None) => {
+                if let Some(cause) = scan_lines(&lines, &svc.absent, &svc.allow, true) {
+                    r.status = Status::Failed;
+                    r.detail = Some("error in logs".into());
+                    r.cause = Some(cause);
+                } else if let Some(missing) = find_missing(&lines, &svc.contains) {
+                    r.status = Status::Failed;
+                    r.detail = Some(format!("output missing \"{missing}\""));
+                }
+            }
         }
     }
-
-    // Teardown: kill every process group we started. The runner owns what it launches.
-    for mut svc in services {
-        let pid = svc.child.id();
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL); // negative pid = the whole process group
-        }
-        let _ = svc.child.kill();
-        let _ = svc.child.wait();
-        crate::own::unregister(pid); // reaped: free the slot before a PID can be recycled
-    }
-
-    let failed = out.iter().filter(|c| c.status == Status::Failed).count();
-    let errored = out.iter().filter(|c| c.status == Status::Errored).count();
-    let skipped = out.iter().filter(|c| c.status == Status::Skipped).count();
-    let verdict = if failed > 0 {
-        "fail"
-    } else if errored > 0 {
-        "couldn't-run"
-    } else {
-        "pass"
-    };
-
-    let report = RunReport {
-        verdict: verdict.into(),
-        failed,
-        errored,
-        skipped,
-        source: source.to_string(),
-        run_dir: run_dir.display().to_string(),
-        seed,
-        checks: out,
-        replay: format!("probatum run {} --seed {}", frozen.display(), seed),
-    };
-    Ok(report)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -272,8 +583,10 @@ fn run_cmd(
     absent: &[String],
     timeout_secs: Option<u64>,
     expect: i64,
-    log_file: &Path,
+    log_file: &Evidence,
     check: &Check,
+    env: &[(String, String)],
+    output: Option<&mut Option<Result<String>>>,
 ) -> CheckReport {
     let started = Instant::now();
     let spawned = {
@@ -281,6 +594,7 @@ fn run_cmd(
         Command::new("sh")
             .arg("-c")
             .arg(cmd)
+            .envs(env.iter().map(|(name, value)| (name, value)))
             .process_group(0) // own group: a run that leaks background children gets swept too
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -291,7 +605,13 @@ fn run_cmd(
         Err(e) => return errored(check, log_file, format!("couldn't run: {e}")),
     };
     crate::own::register(child.id());
-    let (logs, handles) = capture::attach(&mut child, log_file.to_path_buf(), started);
+    let (logs, handles) = capture::attach(
+        &mut child,
+        log_file.path.clone(),
+        started,
+        log_file.private,
+        output.is_some(),
+    );
 
     let status = match timeout_secs {
         None => child.wait(),
@@ -304,12 +624,10 @@ fn run_cmd(
                     Ok(None) => {}
                 }
                 if Instant::now() > deadline {
-                    // Kill the whole group: a hung command may have children.
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    kill_group(&mut child);
+                    for h in handles {
+                        let _ = h.join();
                     }
-                    let _ = child.wait();
-                    std::thread::sleep(Duration::from_millis(120)); // let capture drain
                     let lines = logs.snapshot();
                     return report(
                         check,
@@ -326,11 +644,17 @@ fn run_cmd(
             }
         }
     };
+    // The shell can exit while background descendants still own its pipes.
+    // Sweep the group before draining capture, including on successful exit.
+    kill_group(&mut child);
     for h in handles {
         let _ = h.join();
     }
-    crate::own::unregister(child.id()); // reaped: free the slot
     let lines = logs.snapshot();
+
+    if let Some(output) = output {
+        *output = Some(logs.stdout());
+    }
 
     match status {
         // The expected code (0 unless declared) is the pass condition. A
@@ -383,10 +707,11 @@ fn run_service(
     contains: &[String],
     absent: &[String],
     allow: &[String],
-    log_file: &Path,
+    log_file: &Evidence,
     check: &Check,
     report_index: usize,
     services: &mut Vec<Service>,
+    env: &[(String, String)],
 ) -> CheckReport {
     // Dirty environment: if the readiness URL already answers before we start,
     // something else is on that port — running against it would test the wrong thing.
@@ -406,6 +731,7 @@ fn run_service(
         Command::new("sh")
             .arg("-c")
             .arg(cmd)
+            .envs(env.iter().map(|(name, value)| (name, value)))
             .process_group(0) // own group so teardown kills the whole tree, not just sh
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -416,7 +742,13 @@ fn run_service(
         Err(e) => return errored(check, log_file, format!("couldn't start: {e}")),
     };
     crate::own::register(child.id());
-    let (logs, _handles) = capture::attach(&mut child, log_file.to_path_buf(), started);
+    let (logs, handles) = capture::attach(
+        &mut child,
+        log_file.path.clone(),
+        started,
+        log_file.private,
+        false,
+    );
 
     let track = |services: &mut Vec<Service>, child, logs: &CapturedLogs| {
         services.push(Service {
@@ -426,6 +758,7 @@ fn run_service(
             contains: contains.to_vec(),
             absent: absent.to_vec(),
             allow: allow.to_vec(),
+            handles,
         });
     };
 
@@ -513,9 +846,10 @@ fn run_http(
     absent: &[String],
     timeout_secs: u64,
     max_ms: Option<u128>,
-    log_file: &Path,
+    log_file: &Evidence,
     check: &Check,
     jar: &mut HashMap<String, Vec<(String, String)>>,
+    output: Option<&mut Option<Result<String>>>,
 ) -> CheckReport {
     // A body without an explicit content-type defaults to JSON — the 99% case
     // for smoke-testing an API (documented in --help).
@@ -542,17 +876,21 @@ fn run_http(
     let sent = Instant::now();
     match crate::http::request(method, url, body, &hdrs, Duration::from_secs(timeout_secs)) {
         Ok(resp) => {
+            if let Some(output) = output {
+                *output = Some(if resp.body.len() <= values::MAX_CAPTURE_BYTES {
+                    Ok(resp.body.clone())
+                } else {
+                    Err(anyhow::anyhow!("HTTP capture exceeds 1 MiB"))
+                });
+            }
             store_cookies(jar.entry(host).or_default(), &resp.set_cookie);
             let elapsed_ms = sent.elapsed().as_millis();
             // Evidence: what we actually observed.
             let head: String = resp.body.lines().take(20).collect::<Vec<_>>().join("\n");
-            let _ = std::fs::write(
-                log_file,
-                format!(
-                    "{method} {url}\nHTTP {} in {elapsed_ms}ms\n\n{head}\n",
-                    resp.status
-                ),
-            );
+            log_file.write(format!(
+                "{method} {url}\nHTTP {} in {elapsed_ms}ms\n\n{head}\n",
+                resp.status
+            ));
 
             let status_ok = match expect {
                 Some(code) => resp.status == code,
@@ -643,14 +981,14 @@ fn run_log(
     contains: &[String],
     absent: &[String],
     baseline: LogBaseline,
-    log_file: &Path,
+    log_file: &Evidence,
     check: &Check,
 ) -> CheckReport {
     let meta = match std::fs::metadata(path) {
         Ok(m) => m,
         Err(_) => return errored(check, log_file, format!("log file not found: {path}")),
     };
-    // The window is [offset at run start .. now]. A replaced or truncated file
+    // The window is [offset at scenario start .. now]. A replaced or truncated file
     // makes the window ambiguous: we can no longer say what happened during the run.
     let offset = match baseline {
         Some((ino, size)) => {
@@ -670,7 +1008,7 @@ fn run_log(
             }
             size
         }
-        None => 0, // didn't exist at run start: everything in it was written during the run
+        None => 0, // didn't exist at scenario start: everything in it was written during the run
     };
 
     use std::io::{Read, Seek, SeekFrom};
@@ -684,7 +1022,7 @@ fn run_log(
     }
     let text = String::from_utf8_lossy(&buf);
     let lines: Vec<&str> = text.lines().collect();
-    let _ = std::fs::write(log_file, text.as_bytes()); // evidence: the observed window
+    log_file.write(text.as_bytes()); // evidence: the observed window
 
     if let Some(idx) = lines
         .iter()
@@ -736,7 +1074,7 @@ fn run_log(
 
 /// Fold `Set-Cookie` answers into the host's jar: last value per name wins,
 /// `Max-Age=0` (the logout idiom) deletes. Attributes (Path, Expires, Secure…)
-/// are ignored — the jar lives one run, against one host, over plain http.
+/// are ignored — the jar lives one scenario, against one host, over plain http.
 fn store_cookies(cookies: &mut Vec<(String, String)>, set_cookie: &[String]) {
     for sc in set_cookie {
         let Some((name, value)) = sc.split(';').next().unwrap_or("").split_once('=') else {
@@ -798,23 +1136,31 @@ fn summarize(lines: &[LogLine]) -> Option<String> {
 
 fn report(
     check: &Check,
-    log_file: &Path,
+    log_file: &Evidence,
     status: Status,
     detail: Option<String>,
     cause: Option<Cause>,
 ) -> CheckReport {
     CheckReport {
+        scenario: String::new(), // stamped by the scenario runner
+        step: None,
+        captures: Vec::new(),
+        output_withheld: log_file.private,
         label: check.label(),
         status,
         duration_ms: 0, // stamped by the caller once the check returns
         detail,
         cause,
-        log_file: log_file.display().to_string(),
+        log_file: log_file
+            .path
+            .is_file()
+            .then(|| log_file.path.display().to_string()),
+        reason: None,
     }
 }
 
-fn errored(check: &Check, log_file: &Path, msg: String) -> CheckReport {
-    let _ = std::fs::write(log_file, format!("{msg}\n")); // evidence file always exists
+fn errored(check: &Check, log_file: &Evidence, msg: String) -> CheckReport {
+    log_file.write(format!("{msg}\n")); // evidence file always exists
     report(check, log_file, Status::Errored, Some(msg), None)
 }
 

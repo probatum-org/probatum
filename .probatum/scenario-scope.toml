@@ -1,0 +1,24 @@
+# Windows is a recognized scope but probatum currently runs on Unix hosts.
+# None of these targets may be touched, including the readiness probe/log baseline.
+[foreign]
+os = "windows"
+1 = { run = "exit 91" }
+2 = { run = "exit 92", ready = "http://127.0.0.1:1/health" }
+3 = { get = "http://127.0.0.1:1/never-requested" }
+4 = { log = "/nonexistent/never-read.log", absent = ["ERROR"] }
+
+[local]
+1 = { name = "the applicable check", run = "echo applicable" }
+2 = { run = "exit 93", os = "windows" }
+3 = { get = "http://127.0.0.1:1/never-requested", os = "windows" }
+4 = { log = "/nonexistent/never-read.log", absent = ["ERROR"], os = "windows" }
+
+# One of these applies on the supported development hosts; a matching check
+# scope is allowed, and must not be discarded with the foreign checks.
+[linux]
+os = "linux"
+1 = { run = "true", os = "linux" }
+
+[macos]
+os = "macos"
+1 = { run = "true", os = "macos" }

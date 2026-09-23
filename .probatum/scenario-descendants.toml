@@ -1,0 +1,10 @@
+# The shell exits while its background child still owns the output pipes.
+# Teardown must sweep that child before joining capture and starting the next scenario.
+[z_shell]
+run = "python3 demo-app/app.py & sleep 1"
+timeout = 3
+
+[a_service]
+run = "python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15

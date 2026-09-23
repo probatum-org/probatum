@@ -1,0 +1,6 @@
+[z_service]
+1 = { run = "sleep 1; exit 7", background = true }
+2 = { run = "sleep 1", timeout = 5 }
+
+[a_later]
+run = "exit 91"

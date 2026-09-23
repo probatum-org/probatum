@@ -1,0 +1,16 @@
+# Keep the API alive around several independent invocations, as an external target.
+[[check]]
+run = "python3 demo-app/app.py"
+env = { AUTH = "1", BEARER = "1", LOG_FILE = "demo-app/data/app.log" }
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15
+
+[[check]]
+run = "python3 demo-app/tests/captures.py http"
+contains = "capture HTTP checks verified"
+timeout = 30
+
+[[check]]
+run = "python3 demo-app/tests/captures.py negative"
+contains = "capture negative checks verified"
+timeout = 30

@@ -1,0 +1,12 @@
+[consumer.1]
+run = 'printf "%s" "$VALUE"'
+env = { VALUE = "${quoted producer.2.value}" }
+capture = { copy = "stdout" }
+
+[consumer.10]
+run = "python3 demo-app/tests/captures.py verify"
+env = { VALUE = "${consumer.1.copy}" }
+
+["quoted producer".2]
+run = "python3 demo-app/tests/captures.py emit"
+capture = { value = "stdout" }

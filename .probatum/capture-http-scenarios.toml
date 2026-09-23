@@ -1,0 +1,18 @@
+# Consumers deliberately precede their producer. Neither inherits login's cookies.
+[profile]
+get = "http://127.0.0.1:8087/auth/profile"
+headers = { Authorization = "Bearer ${login.token}" }
+expect = 200
+contains = ["${login.token}", '"profile": "editor"']
+
+[permissions]
+get = "http://127.0.0.1:8087/auth/permissions"
+headers = { Authorization = "Bearer ${login.token}" }
+expect = 200
+contains = ["${login.token}", '"write"']
+
+[login]
+post = "http://127.0.0.1:8087/auth/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 200
+capture = { token = "json.access_token" }

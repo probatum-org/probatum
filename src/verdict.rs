@@ -9,10 +9,23 @@ const YELLOW: &str = "\x1b[33m";
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
 const RESET: &str = "\x1b[0m";
+const WITHHELD_HINT: &str =
+    "response/output excerpts withheld: this scenario captures or consumes values";
 
 pub fn print(r: &RunReport) {
     println!();
+    let show_scenarios = r.checks.iter().any(|c| c.scenario != "default");
+    let mut scenario = None;
     for c in &r.checks {
+        if show_scenarios && scenario != Some(&c.scenario) {
+            let prerequisite = if r.prerequisites.contains(&c.scenario) {
+                " (prerequisite)"
+            } else {
+                ""
+            };
+            println!("{BOLD}[{}]{prerequisite}{RESET}", c.scenario);
+            scenario = Some(&c.scenario);
+        }
         match c.status {
             Status::Passed => {
                 let extra = c
@@ -36,9 +49,16 @@ pub fn print(r: &RunReport) {
                     c.label,
                     c.detail.as_deref().unwrap_or("couldn't run")
                 );
+                if c.output_withheld {
+                    println!("      {DIM}{WITHHELD_HINT}{RESET}");
+                }
             }
-            Status::Skipped => {
-                println!("  {DIM}– {} (skipped){RESET}", c.label);
+            Status::Skipped | Status::Excluded => {
+                println!(
+                    "  {DIM}– {} ({}){RESET}",
+                    c.label,
+                    c.detail.as_deref().unwrap_or("not executed")
+                );
             }
             Status::Failed => {
                 println!(
@@ -51,6 +71,8 @@ pub fn print(r: &RunReport) {
                     for line in &cause.correlated {
                         println!("        {DIM}{line}{RESET}");
                     }
+                } else if c.output_withheld {
+                    println!("      {DIM}{WITHHELD_HINT}{RESET}");
                 }
             }
         }
@@ -61,14 +83,20 @@ pub fn print(r: &RunReport) {
         "pass" => {
             println!(
                 "{GREEN}{BOLD}✓ all passed{RESET} {DIM}({} checks){RESET}",
-                r.checks.len()
+                r.executed
             );
         }
         "couldn't-run" => {
-            println!(
+            if r.reason == Some("dependency_unavailable") {
+                println!("{YELLOW}{BOLD}⚠ couldn't run — required captures unavailable{RESET}");
+            } else if r.executed == 0 {
+                println!("{YELLOW}{BOLD}⚠ nothing verified — no applicable checks{RESET}");
+            } else {
+                println!(
                 "{YELLOW}{BOLD}⚠ couldn't run{RESET} {DIM}({} check(s) — no failures observed){RESET}",
                 r.errored
-            );
+                );
+            }
         }
         _ => {
             let mut parts = vec![format!("{} failed", r.failed)];
@@ -80,6 +108,12 @@ pub fn print(r: &RunReport) {
             }
             println!("{RED}{BOLD}✗ {}{RESET}", parts.join(" · "));
         }
+    }
+    if r.excluded > 0 || r.skipped > 0 {
+        println!(
+            "{DIM}  {} evaluated · {} excluded · {} skipped{RESET}",
+            r.executed, r.excluded, r.skipped
+        );
     }
     println!("{DIM}  logs: {}{RESET}", r.run_dir);
     println!();

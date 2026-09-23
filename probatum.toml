@@ -20,7 +20,7 @@ contains = ["test result: ok."]
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init"]
+contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init", "--scenario", "os =", "no_applicable_checks", "not_selected", "os_mismatch", "previous_failure", "capture =", "env =", "dependency_unavailable", "output_withheld"]
 
 # the full demo flow (service + http + external log) must be green
 [[check]]
@@ -115,7 +115,7 @@ timeout = 30
 name = "--json carries the machine contract"
 run = "./target/debug/probatum run .probatum/missing-log-check.toml --json"
 expect = 2
-contains = ['"schema": 2', '"verdict"', '"duration_ms"', '"run_dir"']
+contains = ['"schema": 4', '"verdict"', '"duration_ms"', '"run_dir"']
 
 # --json must answer for EVERY outcome, including the ones where no run
 # happened at all: an agent should never have to parse stderr to find out.
@@ -123,7 +123,7 @@ contains = ['"schema": 2', '"verdict"', '"duration_ms"', '"run_dir"']
 name = "--json answers on an invalid config"
 run = "./target/debug/probatum run .probatum/invalid-key.toml --json"
 expect = 2
-contains = ['"schema": 2', '"kind": "invalid_config"', '"message"']
+contains = ['"schema": 4', '"kind": "invalid_config"', '"message"']
 absent = ['"checks"']
 
 [[check]]
@@ -145,3 +145,147 @@ timeout = 30
 name = "background service stays up for later checks"
 run = "./target/debug/probatum run .probatum/background.toml"
 timeout = 30
+
+# Named scenarios: assert structured results and the persisted evidence copy.
+
+[[check]]
+name = "scenarios isolate state in source order with steps in numeric order"
+run = "./target/debug/probatum run .probatum/scenario-isolation.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"pass\", \"scenario_order\": [\"z_login\", \"a_fresh\"], \"executed\": 6, \"excluded\": 0, \"skipped\": 0, \"selected_scenario\": null}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "a selected scenario works alone and reports nonselection"
+run = "./target/debug/probatum run .probatum/scenario-isolation.toml --json --scenario a_fresh | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"pass\", \"scenario_order\": [\"z_login\", \"a_fresh\"], \"executed\": 3, \"excluded\": 3, \"skipped\": 0, \"selected_scenario\": \"a_fresh\"}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "OS scope excludes commands, services, HTTP and logs"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"pass\", \"executed\": 2, \"excluded\": 8, \"skipped\": 0}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "nothing applicable keeps an exclusion report"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --json --scenario foreign | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"couldn'\"'\"'t-run\", \"executed\": 0, \"excluded\": 10, \"skipped\": 0, \"reason\": \"no_applicable_checks\"}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "failure skips later scenarios but preserves scope exclusions"
+run = "./target/debug/probatum run .probatum/scenario-failure.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"fail\", \"failed\": 1, \"executed\": 1, \"excluded\": 1, \"skipped\": 2}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "observation errors also skip later scenarios"
+run = "./target/debug/probatum run .probatum/scenario-error.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"couldn'\"'\"'t-run\", \"errored\": 1, \"executed\": 1, \"excluded\": 0, \"skipped\": 1}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "a silent service exit after startup fails before the next scenario"
+run = "./target/debug/probatum run .probatum/scenario-dead-service.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"fail\", \"failed\": 1, \"executed\": 2, \"excluded\": 0, \"skipped\": 1}'"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "no applicable checks exit 2"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --scenario foreign --json"
+expect = 2
+timeout = 30
+contains = ["\"reason\": \"no_applicable_checks\""]
+
+[[check]]
+name = "a failed scenario exits 1"
+run = "./target/debug/probatum run .probatum/scenario-failure.toml --json"
+expect = 1
+timeout = 30
+contains = ["\"reason\": \"previous_failure\""]
+
+[[check]]
+name = "an unobservable scenario exits 2"
+run = "./target/debug/probatum run .probatum/scenario-error.toml --json"
+expect = 2
+timeout = 30
+contains = ["\"reason\": \"previous_failure\""]
+
+[[check]]
+name = "unknown scenario is invalid config"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --scenario typo --json"
+expect = 2
+timeout = 30
+contains = ["\"kind\": \"invalid_config\""]
+absent = ["\"checks\""]
+
+[[check]]
+name = "excluded scenarios are still validated"
+run = "./target/debug/probatum run .probatum/scenario-invalid.toml --scenario selected --json"
+expect = 2
+timeout = 30
+contains = ["\"kind\": \"invalid_config\"", "timeuot"]
+absent = ["\"checks\""]
+
+[[check]]
+name = "unknown CLI options cannot silently select all scenarios"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --scenaro local --json"
+expect = 2
+timeout = 30
+contains = ["\"kind\": \"invalid_config\""]
+absent = ["\"checks\""]
+
+[[check]]
+name = "commands release background descendants before the next scenario"
+run = "./target/debug/probatum run .probatum/scenario-descendants.toml"
+expect = 0
+timeout = 30
+contains = ["all passed"]
+
+[[check]]
+name = "selected scenario ownership survives a panic"
+run = "PROBATUM_TEST_PANIC=1 ./target/debug/probatum run .probatum/scenario-isolation.toml --scenario a_fresh >/dev/null 2>&1; test $? -eq 101 && python3 demo-app/tests/portfree.py"
+expect = 0
+timeout = 30
+
+[[check]]
+name = "ownership survives SIGTERM in the second scenario"
+run = "./target/debug/probatum run .probatum/scenario-signal.toml >/dev/null 2>&1 & P=$!; sleep 2; kill -TERM $P; wait $P; test $? -eq 143 && python3 demo-app/tests/portfree.py"
+expect = 0
+timeout = 30
+
+[[check]]
+name = "replay preserves an exact scenario name with quotes"
+run = "./target/debug/probatum run .probatum/scenario-replay.toml --scenario 'editor'\"'\"'s checks' --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"pass\", \"executed\": 1, \"excluded\": 1, \"selected_scenario\": \"editor'\"'\"'s checks\"}' --replay"
+contains = ["scenario report verified"]
+timeout = 30
+
+[[check]]
+name = "human output says nothing was verified when all checks are excluded"
+run = "./target/debug/probatum run .probatum/scenario-scope.toml --scenario foreign"
+expect = 2
+contains = ["nothing verified", "requires windows", "excluded"]
+absent = ["all passed"]
+
+[[check]]
+name = "captured HTTP results supply one shared bearer, including selection and replay"
+run = "./target/debug/probatum run .probatum/capture-check.toml"
+timeout = 45
+
+[[check]]
+name = "stdout captures cross numbered steps as data through environment variables"
+run = "python3 demo-app/tests/captures.py command"
+contains = "capture command checks verified"
+timeout = 20
+
+[[check]]
+name = "OS exclusions block capture consumers without starting excluded targets"
+run = "python3 demo-app/tests/captures.py scope"
+contains = "capture scope checks verified"
+timeout = 20
+
+[[check]]
+name = "captured values stay private and services are released on panic and signals"
+run = "python3 demo-app/tests/captures.py ownership"
+contains = "capture ownership checks verified"
+timeout = 45

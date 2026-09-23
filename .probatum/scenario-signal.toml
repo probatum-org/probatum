@@ -1,0 +1,8 @@
+[z_first]
+run = "python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+timeout = 15
+
+[a_interrupted]
+1 = { run = "python3 demo-app/app.py", ready = "http://127.0.0.1:8087/healthz", timeout = 15 }
+2 = { run = "sleep 30", timeout = 35 }

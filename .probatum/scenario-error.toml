@@ -1,0 +1,6 @@
+[z_error]
+log = "/nonexistent/missing.log"
+absent = ["ERROR"]
+
+[a_later]
+run = "exit 91"

@@ -1,0 +1,10 @@
+[z_failure]
+1 = { run = "exit 9" }
+2 = { run = "exit 90" }
+
+[a_later]
+run = "exit 91"
+
+[outside]
+os = "windows"
+run = "exit 92"

@@ -33,6 +33,9 @@ pub fn kill_all() {
             unsafe {
                 libc::kill(-pg, libc::SIGKILL); // negative pid = whole group
             }
+            // Clear only after killing: a signal between these operations must
+            // still see the group. No stale IDs survive into another scenario.
+            let _ = slot.compare_exchange(pg, 0, Ordering::SeqCst, Ordering::SeqCst);
         }
     }
 }

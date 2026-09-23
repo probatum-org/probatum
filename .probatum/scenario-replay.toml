@@ -1,0 +1,5 @@
+["editor's checks"]
+run = "echo selected"
+
+[unselected]
+run = "exit 91"

@@ -4,7 +4,9 @@ This document is the durable product and engineering context for `probatum`.
 It records the current direction first; superseded ideas are kept only as a
 short history at the end.
 
-Last consolidated: 2026-07-21.
+Last consolidated: 2026-07-21. Scenario implementation updated: 2026-09-22.
+The July engineering snapshot and candidate list below are historical; see the
+dated decisions and implementation status for subsequent changes.
 
 ## Product
 
@@ -51,7 +53,9 @@ Rules:
 - `name:` — display label.
 
 Rules form an AND. Two checks are also an AND and do not emulate OR. There is no
-general boolean logic, nesting, conditions, dependency graph or plugin system.
+general boolean logic, nesting, conditions or plugin system, and no declared
+dependency graph: the only dependencies are those inferred from capture
+references (see "reusable check outputs", 2026-09-22).
 A narrow list-valued rule such as `expect: [200, 204]` may be considered only
 after a real recurring need appears.
 
@@ -139,7 +143,8 @@ probatum deliberately has:
 - a small curated source/rule vocabulary;
 - sequential top-to-bottom execution;
 - embedded verification primitives rather than shelling out to curl or grep;
-- no plugins, remote imports or template language;
+- no plugins, remote imports or template language (`${scenario.name}`
+  substitution of a captured scalar is the whole of it: no expressions);
 - no implicit cleanup and no CI orchestration.
 
 Build and deploy remain in general automation. probatum owns verification. The
@@ -188,7 +193,7 @@ Or, from probatum's point of view:
 
 > probatum is context-native, not environment-provisioning.
 
-## Current implementation state
+## Engineering snapshot (2026-07-21, historical)
 
 Implemented and dogfooded:
 
@@ -222,7 +227,7 @@ Validation on 2026-07-21:
   result as `failed`; the runner cannot always infer whether an OS-level denial
   is application behavior or infrastructure policy.
 
-## Known engineering debt
+## Engineering debt recorded on 2026-07-21 (historical)
 
 These do not invalidate the product direction, but they are the most important
 remaining robustness items visible in the current code:
@@ -252,7 +257,7 @@ remaining robustness items visible in the current code:
 8. Source comments in `main.rs` still contain the superseded proof/manifest/seed
    wording and should be aligned with the current product.
 
-## Next candidates
+## Candidates recorded on 2026-07-21 (historical)
 
 Admission test for any feature:
 
@@ -284,6 +289,311 @@ Ordered candidates:
 Watchlist, not planned: Windows support and parallel checks. (Mutating HTTP
 left the watchlist 2026-07-27: `post:` shipped against issue #1 — the first
 real need `get:` + `run: curl` couldn't serve.)
+
+## Agreed direction — scenarios and applicability (2026-09-22)
+
+The owner agreed to named scenarios and explicit execution scope while keeping
+each scenario a flat, ordered list of checks. A scenario groups checks and can
+be selected at invocation; applicability describes where those checks are valid.
+
+The first implementation used `[auth]` containing `os` and `check = [...]`.
+After reviewing it, the owner rejected the redundant `check` wrapper and asked
+for operations directly in scenarios, with numbering for multiple operations.
+The owner confirmed `[auth.1]`, `[auth.2]` blocks for multiple operations.
+The revised implementation below is present in the working tree; legacy root
+check lists remain supported as the implicit `default` scenario. The later
+capture implementation extends this baseline as described below.
+
+Agreed constraints:
+
+- Keep scenarios self-contained, with their own service lifecycle and session
+  state, so selecting one does not require an earlier scenario to have run.
+- Applicability uses a small set of predefined, validated criteria. An OS
+  criterion such as `os = "linux"` refers to the environment in which probatum
+  executes. Omitting it imposes no OS restriction within supported platforms.
+- An unknown criterion value or selected scenario name is a configuration error,
+  never a reason to silently execute fewer checks.
+- A coherent multi-step scenario must be scoped as a whole: excluding service
+  startup while still executing its dependent HTTP checks would be misleading.
+  Applicability can also describe an individual, independent check.
+- Excluded checks/scenarios must be visibly reported as out of scope, with a
+  reason. Distinguish them from checks skipped because an earlier check failed.
+- If everything is out of scope, explicitly report that nothing was verified;
+  do not present an ordinary all-passed result.
+- No `if` expressions, branching, dependency graphs, or arbitrary expressions
+  over environment variables. Fixed applicability metadata does not introduce
+  a general conditional language.
+
+### Implementation decision
+
+**Syntax.** A named top-level table is one scenario. A single operation, its
+rules, and optional `os` go directly in that table. For multiple operations,
+the current implementation uses numbered steps under the scenario:
+
+```toml
+[smoke]
+run = "cargo test --offline"
+
+[auth]
+os = "linux"
+
+[auth.1]
+run = "AUTH=1 python3 demo-app/app.py"
+ready = "http://127.0.0.1:8087/healthz"
+
+[auth.2]
+post = "http://127.0.0.1:8087/auth/login"
+body = '{"username":"editor","password":"hunter2"}'
+expect = 200
+```
+
+Numbers identify an operation together with its rules, avoiding numbered rule
+names such as `expect2`. Multiple steps may use `run` or any other supported
+source. Ordinary TOML also permits `1 = { run = "cargo test" }` in the scenario
+table; it means the same as a `[scenario.1]` block. Step numbers are positive
+integers without leading zeros; gaps are allowed. A scenario cannot mix a direct
+operation with numbered steps. The unreleased named `check = [...]` and
+`[[auth.check]]` forms are replaced by this syntax. Direct `[[auth]]` entries are
+not part of the format.
+
+**Compatibility and validation.** Existing root `[[check]]` and `check = [...]`
+files remain valid as one implicit scenario named `default`. A file uses either
+that existing form or named scenario tables; mixing the forms is rejected.
+The root key `check` remains reserved. Scenario names are exact, nonempty TOML
+keys, matched case-sensitively. Empty scenarios and unknown metadata/rule keys
+are errors. Validate the entire file before selection or applicability filtering;
+an excluded scenario must not hide a typo or malformed rule.
+
+**Selection and order.** `probatum run` selects all scenarios;
+`probatum run --scenario auth` selects exactly one. A missing value, repeated
+selector, or unknown name is an invalid-config error (exit 2), before any check
+runs. Unknown CLI options and surplus positional arguments are also errors.
+Scenarios run sequentially in order of first appearance in the file. Numbered
+steps run in ascending numeric order (1, 2, 10), regardless of declaration order;
+legacy root checks retain list order. Selection does not change that order. Enable TOML's
+`preserve_order` feature: the current `toml::Table` sorts keys by name. No
+multi-selector syntax, patterns, dependencies, or parallel execution in this
+first implementation.
+
+**Applicability.** Start with one optional string criterion, `os`, with canonical
+values `linux`, `macos`, and `windows`; unknown values/types are errors. Compare
+against the OS where probatum actually executes, including its container context.
+Recognizing an OS name does not add runtime support for that OS; Windows support
+remains outside this change. No criterion means no additional restriction.
+
+Scenario scope covers all its checks. An independent command/HTTP/log check may
+also declare `os`; a different OS from its enclosing scenario is a configuration
+error, not an override. A service check must use scenario-level OS scope so its
+startup cannot be excluded on its own. There is no inference of dependencies
+between other checks; use scenario scope for a sequence that must run together.
+Excluded checks must not spawn processes, probe endpoints, or open target logs.
+
+**Lifecycle and failure handling.** Each scenario starts with a fresh cookie jar
+and external-log baselines, and fully tears down its owned process groups before
+the next scenario starts. This isolates runner state, not files, databases, or
+other application state; project-owned setup remains explicit checks. The signal
+registry must contain no stale groups from a finished scenario. Preserve global
+stop-at-first-failure/error: later applicable checks/scenarios are skipped.
+Checks already excluded by selection or scope keep their exclusion reason.
+
+**Reports and exit codes.** Keep one evidence directory, one frozen whole config,
+and one outcome document for the invocation. Use globally unique numeric check
+log names; scenario names are report labels, not filesystem paths. Replay records
+the selector as well as the config and seed; OS applicability is re-evaluated in
+the replay environment.
+
+Advance the JSON schema to 3. Keep the flat `checks` list and existing statuses;
+add the scenario name to each check, an `Excluded` status, and machine-readable
+non-execution reasons: `not_selected`, `os_mismatch`, and `previous_failure`
+(the last remains `Skipped`). Non-executed checks have zero duration and a null
+log path. Record actual OS, selection, and executed/excluded counts. Here
+`executed` counts checks whose evaluation was attempted, including an `Errored`
+result; exclusions and skips do not count. Human output identifies scenario
+boundaries and exclusion reasons and summarizes evaluated versus excluded checks.
+
+Retain result precedence: an observed failure gives exit 1; otherwise an
+execution/observation error gives exit 2. With no eligible checks, return exit 2
+and verdict `couldn't-run`, retaining the exclusion report with the run-level
+reason `no_applicable_checks`. With at least one evaluated check and no failure
+or error, return exit 0 while still reporting exclusions. Invalid configs retain
+their structured error envelope; panic and signal exit behavior stays unchanged.
+
+**Implementation sequence and acceptance.**
+
+1. Introduce manifest/scenario/scoped-check structures around the existing
+   source types; parse both file forms and preserve source order. Add focused
+   parser tests for strictness, empty/mixed forms, numeric step ordering, OS rules,
+   and equivalent TOML spellings. Keep the offline build.
+2. Add strict CLI selection and compute applicability before executing checks.
+   Unit-test OS matching with an explicit platform input; runtime uses the real
+   platform, with no public OS override.
+3. Give each scenario an execution context within one run, then add schema-3
+   aggregation, human reporting, and replay selection. Verify cleanup on every
+   exit path across scenario boundaries.
+4. Extend the dogfooding suite with named scenarios in non-alphabetical order,
+   selection/nonselection, unknown names, OS exclusions without side effects,
+   invalid rules in excluded scenarios, mixed scope, zero applicable checks,
+   global fail-fast, and per-scenario service/cookie/log-window isolation. Keep
+   legacy configs covered and assert JSON reasons/counts and exact exit codes.
+5. Align README, help/init examples, and agent guidance with implemented behavior;
+   run the complete native suite.
+
+### Implementation status (2026-09-22)
+
+Implemented in the working tree: direct/numbered named scenarios, legacy root
+checks, source-order scenario execution and numeric step ordering,
+strict single-scenario selection, scenario/check OS scopes, global fail-fast,
+per-scenario process/cookie/log state, and schema-3 reports with explicit
+exclusions and the zero-applicable-check outcome. Help, init and README describe
+these contracts. No release/version bump is part of this change.
+
+Lifecycle work also closes two concrete gaps: commands kill remaining group
+children before waiting for capture to finish, and a service that exits after
+startup is reported as failed even without a crash marker. Capture readers are
+drained at scenario teardown and ownership slots are cleared between scenarios.
+The separate large-output issue found during the initial review (rules evaluate
+only the first 100,000 captured lines) remains engineering debt.
+
+Acceptance checks exercise the public binary, including non-alphabetical scenario
+order, steps declared out of numeric order, selecting a scenario alone,
+exclusion reports/evidence, OS matching,
+validation of excluded configs, exact exit codes, cleanup/session/log isolation,
+panic/SIGTERM ownership, and replay with an apostrophe in the selected name.
+Parser/CLI unit tests cover the configuration and selection grammar. The JSON
+schema changes from 2 to 3; consumers must handle Excluded and nullable log paths.
+
+## Agreed direction — reusable check outputs (2026-09-22)
+
+The owner endorsed explicitly capturing a check's result for reuse by other
+scenarios. The concrete need is a login that returns a bearer token consumed by
+several authenticated requests; other uses include an API-created identifier or
+a path printed by a command. The owner subsequently requested implementation;
+the following spelling is now supported in the working tree:
+
+```toml
+[login]
+post = "http://localhost:8080/login"
+body = '{"username":"editor","password":"secret"}'
+expect = 200
+capture = { token = "json.access_token" }
+
+[profile]
+get = "http://localhost:8080/profile"
+headers = { Authorization = "Bearer ${login.token}" }
+expect = 200
+
+[permissions]
+get = "http://localhost:8080/permissions"
+headers = { Authorization = "Bearer ${login.token}" }
+expect = 200
+```
+
+Keep the initial scope to a JSON response field or a command's stdout, exposed
+under an explicit name. References substitute captured values without arbitrary
+expressions, transformations, conditions, or scripts in the capture language.
+
+A reference introduces a data dependency: selecting `profile` must also select
+and execute `login` first, once per invocation even with several consumers.
+This extends the original no-dependency baseline. A failed producer or missing
+required field prevents its consumers from running. Validate unknown references
+and cycles before execution; an OS exclusion must not be bypassed to produce a
+value. Preserve the distinction between failure and inability to run when
+defining the resulting reports. Values come from the current invocation, not a
+cache of earlier runs.
+
+Sharing captured values does not extend the lifetime of a scenario's services or
+share its cookie jar. A login against an external API fits the example above;
+a service needed throughout a sequence still belongs with that sequence.
+
+### Implementation contract and status
+
+Implemented without additional dependencies. A capture selects `stdout` from a
+completed command or `json.field` / `json.object.field` from an HTTP response.
+Capture names and JSON path segments are identifiers; arrays and expression
+evaluation are outside this version. JSON captures preserve scalar types and
+reject null, objects, arrays and empty strings. Stdout is UTF-8 with trailing
+CR/LF removed, excludes stderr, and otherwise retains whitespace. Capture input
+is bounded at 1 MiB. Missing/invalid/empty results fail the producer (exit 1);
+unreadable, non-UTF-8 or oversized output gives couldn't-run (exit 2). Captures
+are published atomically only after all assertions and extractions succeed.
+
+Direct scenarios use `${login.token}`, numbered steps `${auth.2.token}`, and
+legacy checks `${default.1.token}`. Quoted scenario names are referenced literally,
+without their TOML delimiters. Exported addresses containing `$`, braces or
+newlines, and ambiguous addresses, are rejected. `$${...}` escapes a literal
+reference in template fields. Same-scenario references must point to an earlier
+numeric step; all cross-scenario references are validated before OS/selection
+filtering, including cycle checks. Runtime planning includes transitive producer
+scenarios only for applicable consumers, places prerequisites before consumers,
+and otherwise traverses scenarios in source order. Each scenario executes once.
+
+Substitution is limited to HTTP URLs/headers/JSON body values, readiness URLs,
+contains/absent/allow rules, and the new command/service `env` table. URL values
+are percent-encoded; HTTP headers reject CR/LF/NUL. JSON bodies are parsed and
+serialized: a whole string reference retains the scalar type, an embedded one
+produces escaped text. Commands receive values as environment data with ordinary
+shell quoting; probatum does not interpolate shell source, log paths or labels.
+GET now accepts headers too, so a bearer can authorize a read request.
+
+An unavailable capture skips its consumer with `dependency_unavailable` and
+makes the overall result couldn't-run unless an observed failure takes precedence.
+Global fail-fast still applies to actual failures/errors. Excluded producers are
+never forced to execute. Services and cookies remain owned by one scenario.
+
+All captures are sensitive in this version. Entire payloads and diagnostic
+excerpts are withheld for scenarios declaring or consuming captures, including
+their services, before any evidence write. This deliberately trades diagnostic
+detail for avoiding secret persistence even before a token can be extracted, or
+on malformed output, failure, panic and signals. Checks evaluate the real data
+in memory; reports retain outcomes, timings and unexpanded labels. The frozen
+config is still verbatim, including literal credentials. Application-owned files
+are outside this policy. A future finer-grained redaction mechanism would need
+to preserve these guarantees.
+
+### Why this reverses the 2026-08-14 refusal
+
+The 0.9.0 entry refused `capture` + `${tok}` as "more surface … it starts
+turning the config into a program", pending "a real recurring need that
+cookies cannot hold". That need arrived: a bearer token returned in a JSON body
+cannot travel in a cookie jar, and neither can an API-created identifier or a
+command's printed path. The refusal's own condition was met. What keeps it from
+becoming a program is the same line as before, drawn tighter: named captures of
+one scalar, substitution only, no expressions, no transformations, no
+conditions. The inferred prerequisites are a dependency graph — the one the
+product section excluded — admitted only in this form: derived from references,
+validated for cycles, never declared or ordered by hand.
+
+### Review follow-up (2026-09-23)
+
+A review of the working tree found two gaps, both reproduced before fixing.
+
+**Withholding erased probatum's own diagnosis.** Every check in a sensitive
+scenario reported only `check failed; output withheld`: an unreachable service
+("nothing answered on 127.0.0.1:8087") and an unmet rule (`body missing "…"`)
+became indistinguishable — in the auth flow, where diagnosis matters most. The
+policy now separates the two sources of text. What the system under test said
+stays withheld as before (bodies, output, log excerpts, `cause`, evidence
+files, and a passing command's output summary). The `detail` probatum writes
+itself is kept, with the text of every captured value replaced by `[redacted]`
+(values under 4 characters are left alone so a count cannot shred
+"HTTP 201 in 2ms"; a credential is never that short). Redaction runs after
+extraction, so a producer's own values are covered. Human output adds a line
+saying excerpts were withheld, so the missing cause does not read as a bug.
+Covered in `captures.py negative`.
+
+**The headline example assumed an external API.** Cross-scenario sharing works
+against a running API; with a service probatum starts, the service dies with
+its producer scenario and consumers find nothing listening. That is the agreed
+ownership rule, kept. The README and `--help` now show the service-backed form
+(one scenario, `${auth.2.token}`), and the unmasked detail makes the failure
+self-explanatory.
+
+JSON schema 4 adds `step`, published `captures` names, `output_withheld` and the
+run's inferred `prerequisites`, plus the dependency-unavailable reason. Values are
+never serialized or cached between invocations; replay reruns their producers.
+Regression coverage includes shared bearer login, standalone selection/replay,
+stdout and numbered-step chaining, shell/JSON/URL escaping, exclusions, invalid
+references, capture failures/limits and privacy/ownership on panic and signals.
 
 ## Decisions still open
 

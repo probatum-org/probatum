@@ -1,9 +1,9 @@
-//! Config parsing — a flat list of checks. No ceremony, no logic, no nesting.
+//! Config parsing — direct or numbered scenario steps, or one legacy default list.
 //!
 //! A check = one source + flat AND rules:
 //!
 //!   [[check]] run = "<cmd>"                command to completion (exit code is the authority)
-//!   [[check]] run = ... + ready/timeout    start a service, wait until it answers, keep it alive
+//!   [[check]] run = ... + ready/background start a service and retain it
 //!   [[check]] get = "<url>"                HTTP GET (embedded client)
 //!   [[check]] post = "<url>"               HTTP POST (+ body, headers)
 //!   [[check]] put/patch/delete = "<url>"   same shape as post
@@ -14,8 +14,74 @@
 //! Unknown keys are a typo, not a feature: they are rejected. So is a rule of
 //! the wrong type — a dropped rule is a check that silently asserts less.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use toml::{Table, Value};
+
+#[derive(Debug)]
+pub struct Manifest {
+    pub scenarios: Vec<Scenario>,
+}
+
+#[derive(Debug)]
+pub struct Scenario {
+    pub name: String,
+    pub os: Option<Os>,
+    pub checks: Vec<ScopedCheck>,
+}
+
+#[derive(Debug)]
+pub struct ScopedCheck {
+    pub check: Check,
+    pub os: Option<Os>,
+    pub step: Option<usize>,
+    pub captures: Vec<crate::values::Capture>,
+    pub env: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Os {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl Os {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Macos => "macos",
+            Self::Windows => "windows",
+        }
+    }
+
+    pub fn matches(self, current: &str) -> bool {
+        self.as_str() == current
+    }
+
+    fn parse(value: Option<&Value>) -> Result<Option<Self>> {
+        match value {
+            None => Ok(None),
+            Some(Value::String(s)) => match s.as_str() {
+                "linux" => Ok(Some(Self::Linux)),
+                "macos" => Ok(Some(Self::Macos)),
+                "windows" => Ok(Some(Self::Windows)),
+                _ => bail!("unknown os {s:?} (expected linux, macos, or windows)"),
+            },
+            Some(_) => bail!("'os' must be a string (linux, macos, or windows)"),
+        }
+    }
+}
+
+impl Manifest {
+    pub fn validate_selection(&self, selected: Option<&str>) -> Result<()> {
+        if let Some(name) = selected {
+            if !self.scenarios.iter().any(|s| s.name == name) {
+                bail!("unknown scenario {name:?}");
+            }
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Check {
@@ -36,7 +102,7 @@ pub enum Check {
         /// out of the config into `; test $? -eq N`.
         expect: i64,
     },
-    /// `run` + `ready`/`timeout` — there is no exit code to trust while it
+    /// `run` + `ready`/`background` — there is no exit code to trust while it
     /// runs, so the default crash filter applies to its logs; `allow` exempts.
     Service {
         cmd: String,
@@ -67,7 +133,7 @@ pub enum Check {
         /// how long it took, with the measured number as evidence.
         max_ms: Option<u128>,
     },
-    /// `log` — evaluated from run start (offset noted before any check runs).
+    /// `log` — evaluated from scenario start (offset noted before its checks).
     /// At least one rule is required: a check without rules asserts nothing.
     Log {
         path: String,
@@ -91,154 +157,269 @@ impl Check {
     }
 }
 
-pub fn parse(text: &str) -> Result<Vec<Check>> {
+pub fn parse(text: &str) -> Result<Manifest> {
     let doc: Table = text
         .parse::<Table>()
         .map_err(|e| anyhow::anyhow!("invalid config: {e}"))?;
 
-    for key in doc.keys() {
-        if key != "check" {
-            bail!("unknown top-level key '{key}' — a config is a list of [[check]] entries");
-        }
+    if doc.is_empty() {
+        bail!("config has no checks");
     }
-    let items = match doc.get("check") {
+    if let Some(value) = doc.get("check") {
+        if doc.len() != 1 {
+            bail!("cannot mix root 'check' with named scenarios");
+        }
+        return Ok(Manifest {
+            scenarios: vec![Scenario {
+                name: "default".into(),
+                os: None,
+                checks: parse_checks(Some(value), None).context("scenario \"default\"")?,
+            }],
+        });
+    }
+    let mut scenarios = Vec::new();
+    for (name, value) in &doc {
+        if name.is_empty() {
+            bail!("scenario name must not be empty");
+        }
+        let map = value.as_table().with_context(|| {
+            format!("unknown top-level key '{name}': expected a scenario table [{name}]")
+        })?;
+        let scenario = (|| -> Result<Scenario> {
+            let os = Os::parse(map.get("os"))?;
+            Ok(Scenario {
+                name: name.clone(),
+                os,
+                checks: parse_scenario_checks(map, os)?,
+            })
+        })()
+        .with_context(|| format!("scenario {name:?}"))?;
+        scenarios.push(scenario);
+    }
+    Ok(Manifest { scenarios })
+}
+
+fn parse_scenario_checks(map: &Table, scenario_os: Option<Os>) -> Result<Vec<ScopedCheck>> {
+    let mut rules = map.clone();
+    rules.remove("os");
+    if rules.is_empty() {
+        bail!("scenario has no checks");
+    }
+    if rules.contains_key("check") {
+        bail!("put the operation directly in the scenario, or use numbered steps such as [auth.1]; 'check' is only supported at the root for legacy configs");
+    }
+    let numbered = rules
+        .keys()
+        .any(|key| !key.is_empty() && key.bytes().all(|c| c.is_ascii_digit()));
+    if !numbered {
+        let mut check = parse_scoped_check(&rules, 1, scenario_os)?;
+        check.step = None;
+        return Ok(vec![check]);
+    }
+
+    let mut steps = Vec::new();
+    for (key, value) in &rules {
+        let n = key
+            .parse::<usize>()
+            .ok()
+            .filter(|&n| n > 0 && n.to_string() == *key)
+            .with_context(|| {
+                format!("invalid step key '{key}': numbered scenarios accept only 'os' and positive step numbers without leading zeros; do not mix direct operations with numbered steps")
+            })?;
+        let step = value
+            .as_table()
+            .with_context(|| format!("check {n} must be a table, for example [auth.{n}]"))?;
+        steps.push((n, step));
+    }
+    steps.sort_unstable_by_key(|(n, _)| *n);
+    steps
+        .into_iter()
+        .map(|(n, step)| parse_scoped_check(step, n, scenario_os))
+        .collect()
+}
+
+fn parse_checks(value: Option<&Value>, scenario_os: Option<Os>) -> Result<Vec<ScopedCheck>> {
+    let items = match value {
         Some(Value::Array(a)) if !a.is_empty() => a,
         // An empty list is not a malformed list: say what is actually wrong.
         Some(Value::Array(_)) | None => {
-            bail!("config has no checks — a config is a list of [[check]] entries")
+            bail!("scenario has no checks — 'check' must be a nonempty list")
         }
         Some(_) => bail!("'check' must be a list of [[check]] entries"),
     };
 
-    let mut checks = Vec::new();
+    let mut scoped = Vec::new();
     for (i, item) in items.iter().enumerate() {
         let n = i + 1;
         let map = item
             .as_table()
             .ok_or_else(|| anyhow::anyhow!("check {n} must be a table (`[[check]]`)"))?;
 
-        // The writing methods share one shape: url + body + headers. `get`
-        // stays apart — a body on a GET is a mistake, not a feature.
-        const WRITE_METHODS: [(&str, &str); 4] = [
-            ("post", "POST"),
-            ("put", "PUT"),
-            ("patch", "PATCH"),
-            ("delete", "DELETE"),
-        ];
-        let write_method = WRITE_METHODS
-            .iter()
-            .find(|(k, _)| map.contains_key(*k))
-            .copied();
+        scoped.push(parse_scoped_check(map, n, scenario_os)?);
+    }
+    Ok(scoped)
+}
 
-        if map.contains_key("get") {
-            reject_unknown(
-                map,
-                n,
-                &[
-                    "get", "expect", "contains", "absent", "timeout", "max_ms", "name",
-                ],
-            )?;
-            checks.push(Check::Http {
-                method: "GET",
-                url: req_str(map, "get", n)?,
-                name: opt_str(map, "name", n)?,
-                body: None,
-                headers: Vec::new(),
-                expect: opt_u16(map, "expect", n)?,
-                contains: str_list(map, "contains", n)?,
-                absent: str_list(map, "absent", n)?,
-                timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
-                max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
-            });
-        } else if let Some((key, method)) = write_method {
-            reject_unknown(
-                map,
-                n,
-                &[
-                    key, "body", "headers", "expect", "contains", "absent", "timeout", "max_ms",
-                    "name",
-                ],
-            )?;
-            checks.push(Check::Http {
-                method,
-                url: req_str(map, key, n)?,
-                name: opt_str(map, "name", n)?,
-                body: opt_str(map, "body", n)?,
-                headers: str_map(map, "headers", n)?,
-                expect: opt_u16(map, "expect", n)?,
-                contains: str_list(map, "contains", n)?,
-                absent: str_list(map, "absent", n)?,
-                timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
-                max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
-            });
-        } else if map.contains_key("log") {
-            reject_unknown(map, n, &["log", "contains", "absent", "name"])?;
-            let contains = str_list(map, "contains", n)?;
-            let absent = str_list(map, "absent", n)?;
-            if contains.is_empty() && absent.is_empty() {
-                bail!("check {n}: 'log' needs at least one rule (contains/absent) — a check without rules asserts nothing");
-            }
-            checks.push(Check::Log {
-                path: req_str(map, "log", n)?,
-                name: opt_str(map, "name", n)?,
-                contains,
-                absent,
-            });
-        } else if map.contains_key("run") {
-            reject_unknown(
-                map,
-                n,
-                &[
-                    "run",
-                    "ready",
-                    "background",
-                    "timeout",
-                    "expect",
-                    "contains",
-                    "absent",
-                    "allow",
-                    "name",
-                ],
-            )?;
-            let cmd = req_str(map, "run", n)?;
-            let name = opt_str(map, "name", n)?;
-            let contains = str_list(map, "contains", n)?;
-            let absent = str_list(map, "absent", n)?;
-            let allow = str_list(map, "allow", n)?;
-            // A service is declared, never inferred from an unrelated key:
-            // `ready` (probe it) or `background` (just keep it running). That
-            // frees `timeout` to mean one thing everywhere — how long we wait.
-            if map.contains_key("ready") || opt_bool(map, "background", n)?.unwrap_or(false) {
-                if map.contains_key("expect") {
-                    bail!("check {n}: 'expect' is the exit code of a command that finishes — a service is kept running, so it has none");
-                }
-                checks.push(Check::Service {
-                    cmd,
-                    name,
-                    ready: opt_str(map, "ready", n)?,
-                    timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(30),
-                    contains,
-                    absent,
-                    allow,
-                });
-            } else {
-                if !allow.is_empty() {
-                    bail!("check {n}: 'allow' only applies to a service (add ready or background) — a plain run has no default filter to exempt");
-                }
-                checks.push(Check::Run {
-                    cmd,
-                    name,
-                    contains,
-                    absent,
-                    timeout_secs: opt_u64(map, "timeout", n)?,
-                    expect: opt_i64(map, "expect", n)?.unwrap_or(0),
-                });
-            }
-        } else {
-            bail!("check {n} needs a 'run', 'get', 'post', 'put', 'patch', 'delete' or 'log' key");
+fn parse_scoped_check(map: &Table, n: usize, scenario_os: Option<Os>) -> Result<ScopedCheck> {
+    let os = Os::parse(map.get("os")).with_context(|| format!("check {n}"))?;
+    if let (Some(parent), Some(child)) = (scenario_os, os) {
+        if parent != child {
+            bail!(
+                "check {n}: os = {:?} conflicts with scenario os = {:?}",
+                child.as_str(),
+                parent.as_str()
+            );
         }
     }
-    Ok(checks)
+    let mut rules = map.clone();
+    rules.remove("os");
+    rules.remove("capture");
+    rules.remove("env");
+    let check = parse_check(&rules, n)?;
+    if os.is_some() && matches!(check, Check::Service { .. }) {
+        bail!("check {n}: put 'os' on the scenario, not on a service check");
+    }
+    let captures = crate::values::parse_captures(map.get("capture"), &check)
+        .with_context(|| format!("check {n}"))?;
+    let env = str_map(map, "env", n)?;
+    if map.contains_key("env") && !matches!(check, Check::Run { .. } | Check::Service { .. }) {
+        bail!("check {n}: 'env' is only supported on commands and services");
+    }
+    for (name, value) in &env {
+        if !crate::values::identifier(name) || value.contains('\0') {
+            bail!("check {n}: invalid environment entry {name:?}");
+        }
+    }
+    Ok(ScopedCheck {
+        check,
+        os,
+        step: Some(n),
+        captures,
+        env,
+    })
+}
+
+fn parse_check(map: &Table, n: usize) -> Result<Check> {
+    // The writing methods share one shape: url + body + headers. `get`
+    // stays apart — a body on a GET is a mistake, not a feature.
+    const WRITE_METHODS: [(&str, &str); 4] = [
+        ("post", "POST"),
+        ("put", "PUT"),
+        ("patch", "PATCH"),
+        ("delete", "DELETE"),
+    ];
+    let write_method = WRITE_METHODS
+        .iter()
+        .find(|(k, _)| map.contains_key(*k))
+        .copied();
+
+    if map.contains_key("get") {
+        reject_unknown(
+            map,
+            n,
+            &[
+                "get", "headers", "expect", "contains", "absent", "timeout", "max_ms", "name",
+            ],
+        )?;
+        Ok(Check::Http {
+            method: "GET",
+            url: req_str(map, "get", n)?,
+            name: opt_str(map, "name", n)?,
+            body: None,
+            headers: str_map(map, "headers", n)?,
+            expect: opt_u16(map, "expect", n)?,
+            contains: str_list(map, "contains", n)?,
+            absent: str_list(map, "absent", n)?,
+            timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
+            max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
+        })
+    } else if let Some((key, method)) = write_method {
+        reject_unknown(
+            map,
+            n,
+            &[
+                key, "body", "headers", "expect", "contains", "absent", "timeout", "max_ms", "name",
+            ],
+        )?;
+        Ok(Check::Http {
+            method,
+            url: req_str(map, key, n)?,
+            name: opt_str(map, "name", n)?,
+            body: opt_str(map, "body", n)?,
+            headers: str_map(map, "headers", n)?,
+            expect: opt_u16(map, "expect", n)?,
+            contains: str_list(map, "contains", n)?,
+            absent: str_list(map, "absent", n)?,
+            timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(5),
+            max_ms: opt_u64(map, "max_ms", n)?.map(u128::from),
+        })
+    } else if map.contains_key("log") {
+        reject_unknown(map, n, &["log", "contains", "absent", "name"])?;
+        let contains = str_list(map, "contains", n)?;
+        let absent = str_list(map, "absent", n)?;
+        if contains.is_empty() && absent.is_empty() {
+            bail!("check {n}: 'log' needs at least one rule (contains/absent) — a check without rules asserts nothing");
+        }
+        Ok(Check::Log {
+            path: req_str(map, "log", n)?,
+            name: opt_str(map, "name", n)?,
+            contains,
+            absent,
+        })
+    } else if map.contains_key("run") {
+        reject_unknown(
+            map,
+            n,
+            &[
+                "run",
+                "ready",
+                "background",
+                "timeout",
+                "expect",
+                "contains",
+                "absent",
+                "allow",
+                "name",
+            ],
+        )?;
+        let cmd = req_str(map, "run", n)?;
+        let name = opt_str(map, "name", n)?;
+        let contains = str_list(map, "contains", n)?;
+        let absent = str_list(map, "absent", n)?;
+        let allow = str_list(map, "allow", n)?;
+        // A service is declared, never inferred from an unrelated key:
+        // `ready` (probe it) or `background` (just keep it running). That
+        // frees `timeout` to mean one thing everywhere — how long we wait.
+        let background = opt_bool(map, "background", n)?.unwrap_or(false);
+        if map.contains_key("ready") || background {
+            if map.contains_key("expect") {
+                bail!("check {n}: 'expect' is the exit code of a command that finishes — a service is kept running, so it has none");
+            }
+            Ok(Check::Service {
+                cmd,
+                name,
+                ready: opt_str(map, "ready", n)?,
+                timeout_secs: opt_u64(map, "timeout", n)?.unwrap_or(30),
+                contains,
+                absent,
+                allow,
+            })
+        } else {
+            if !allow.is_empty() {
+                bail!("check {n}: 'allow' only applies to a service (add ready or background) — a plain run has no default filter to exempt");
+            }
+            Ok(Check::Run {
+                cmd,
+                name,
+                contains,
+                absent,
+                timeout_secs: opt_u64(map, "timeout", n)?,
+                expect: opt_i64(map, "expect", n)?.unwrap_or(0),
+            })
+        }
+    } else {
+        bail!("check {n} needs a 'run', 'get', 'post', 'put', 'patch', 'delete' or 'log' key");
+    }
 }
 
 fn req_str(map: &Table, key: &str, n: usize) -> Result<String> {
@@ -364,13 +545,21 @@ mod tests {
     /// in the dogfooding suite (probatum.toml) — this is only the parser,
     /// where an end-to-end test would cost a process and a committed file per
     /// case.
+    fn parsed_checks(text: &str) -> Result<Vec<Check>> {
+        Ok(parse(text)?
+            .scenarios
+            .into_iter()
+            .flat_map(|s| s.checks.into_iter().map(|c| c.check))
+            .collect())
+    }
+
     fn err(text: &str) -> String {
-        parse(text).unwrap_err().to_string()
+        format!("{:#}", parse(text).unwrap_err())
     }
 
     #[test]
     fn each_source_parses() {
-        let checks = parse(
+        let checks = parsed_checks(
             r#"
             [[check]]
             run = "cargo test"
@@ -400,7 +589,7 @@ mod tests {
     fn timeout_alone_is_a_deadline_not_a_service() {
         // Before 0.4.0 `timeout` also meant "this is a service", which is why
         // it could not mean "deadline". A service is declared now.
-        let checks = parse("[[check]]\nrun = \"x\"\ntimeout = 5").unwrap();
+        let checks = parsed_checks("[[check]]\nrun = \"x\"\ntimeout = 5").unwrap();
         assert!(matches!(
             checks[0],
             Check::Run {
@@ -408,16 +597,16 @@ mod tests {
                 ..
             }
         ));
-        let checks = parse("[[check]]\nrun = \"x\"\nbackground = true").unwrap();
+        let checks = parsed_checks("[[check]]\nrun = \"x\"\nbackground = true").unwrap();
         assert!(matches!(checks[0], Check::Service { .. }));
     }
 
     #[test]
     fn expect_is_the_exit_code_of_a_command() {
-        let checks = parse("[[check]]\nrun = \"x\"\nexpect = 2").unwrap();
+        let checks = parsed_checks("[[check]]\nrun = \"x\"\nexpect = 2").unwrap();
         assert!(matches!(checks[0], Check::Run { expect: 2, .. }));
         // default stays "must succeed"
-        let checks = parse("[[check]]\nrun = \"x\"").unwrap();
+        let checks = parsed_checks("[[check]]\nrun = \"x\"").unwrap();
         assert!(matches!(checks[0], Check::Run { expect: 0, .. }));
         // a service is kept running, so it has no exit code to expect
         assert!(err("[[check]]\nrun = \"x\"\nready = \"u\"\nexpect = 2").contains("kept running"));
@@ -455,12 +644,14 @@ mod tests {
     fn allow_belongs_to_services() {
         assert!(err("[[check]]\nrun = \"x\"\nallow = [\"noise\"]")
             .contains("only applies to a service"));
-        assert!(parse("[[check]]\nrun = \"x\"\nready = \"u\"\nallow = [\"noise\"]").is_ok());
+        assert!(
+            parsed_checks("[[check]]\nrun = \"x\"\nready = \"u\"\nallow = [\"noise\"]").is_ok()
+        );
     }
 
     #[test]
     fn a_rule_accepts_one_string_or_a_list() {
-        let checks = parse("[[check]]\nlog = \"a\"\nabsent = \"ERROR\"").unwrap();
+        let checks = parsed_checks("[[check]]\nlog = \"a\"\nabsent = \"ERROR\"").unwrap();
         match &checks[0] {
             Check::Log { absent, .. } => assert_eq!(absent, &["ERROR"]),
             _ => panic!("expected a log check"),
@@ -469,7 +660,7 @@ mod tests {
 
     #[test]
     fn every_write_method_shares_the_post_shape() {
-        let checks = parse(
+        let checks = parsed_checks(
             r#"
             [[check]]
             put = "http://x"
@@ -505,17 +696,17 @@ mod tests {
 
     #[test]
     fn absent_applies_to_an_http_body() {
-        let checks = parse("[[check]]\nget = \"http://x\"\nabsent = [\"gone\"]").unwrap();
+        let checks = parsed_checks("[[check]]\nget = \"http://x\"\nabsent = [\"gone\"]").unwrap();
         match &checks[0] {
             Check::Http { absent, .. } => assert_eq!(absent, &["gone"]),
             _ => panic!("expected an http check"),
         }
-        assert!(parse("[[check]]\ndelete = \"http://x\"\nabsent = [\"gone\"]").is_ok());
+        assert!(parsed_checks("[[check]]\ndelete = \"http://x\"\nabsent = [\"gone\"]").is_ok());
     }
 
     #[test]
     fn headers_are_a_flat_table_of_strings() {
-        let checks = parse(
+        let checks = parsed_checks(
             "[[check]]\npost = \"http://x\"\nheaders = { content-type = \"application/json\" }",
         )
         .unwrap();
@@ -533,7 +724,7 @@ mod tests {
 
     #[test]
     fn defaults_match_the_documented_contract() {
-        let checks = parse("[[check]]\nget = \"http://x\"").unwrap();
+        let checks = parsed_checks("[[check]]\nget = \"http://x\"").unwrap();
         match &checks[0] {
             // omitted expect = any 2xx (None), request deadline 5s, no budget
             Check::Http {
@@ -548,7 +739,7 @@ mod tests {
             }
             _ => panic!("expected an http check"),
         }
-        let checks = parse("[[check]]\nrun = \"x\"\nready = \"u\"").unwrap();
+        let checks = parsed_checks("[[check]]\nrun = \"x\"\nready = \"u\"").unwrap();
         match &checks[0] {
             Check::Service { timeout_secs, .. } => assert_eq!(*timeout_secs, 30),
             _ => panic!("expected a service"),
@@ -557,9 +748,10 @@ mod tests {
 
     #[test]
     fn the_label_falls_back_to_the_source() {
-        let checks =
-            parse("[[check]]\nget = \"http://x/v\"\n[[check]]\nname = \"pretty\"\nrun = \"cmd\"")
-                .unwrap();
+        let checks = parsed_checks(
+            "[[check]]\nget = \"http://x/v\"\n[[check]]\nname = \"pretty\"\nrun = \"cmd\"",
+        )
+        .unwrap();
         assert_eq!(checks[0].label(), "GET http://x/v");
         assert_eq!(checks[1].label(), "pretty");
     }
@@ -570,5 +762,138 @@ mod tests {
         let e =
             err("[[check]]\nrun = \"a\"\n[[check]]\nrun = \"b\"\n[[check]]\nrun = \"c\"\nnope = 1");
         assert!(e.contains("check 3"), "{e}");
+    }
+
+    #[test]
+    fn scenarios_preserve_source_order_and_sort_steps_numerically() {
+        let m = parse("[zeta.10]\nrun = 'third'\n[zeta.2]\nrun = 'second'\n[zeta.1]\nrun = 'first'\n[alpha]\nrun = 'fourth'").unwrap();
+        assert_eq!(
+            m.scenarios
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            ["zeta", "alpha"]
+        );
+        assert_eq!(m.scenarios[0].checks[0].check.label(), "first");
+        assert_eq!(m.scenarios[0].checks[1].check.label(), "second");
+        assert_eq!(m.scenarios[0].checks[2].check.label(), "third");
+        assert_eq!(m.scenarios[1].checks[0].check.label(), "fourth");
+        assert!(m.validate_selection(Some("alpha")).is_ok());
+        assert!(m.validate_selection(Some("Alpha")).is_err());
+    }
+
+    #[test]
+    fn numbered_tables_and_inline_steps_share_the_check_language() {
+        let legacy = parse("check = [{run = 'true'}]").unwrap();
+        assert_eq!(legacy.scenarios[0].name, "default");
+        assert!(legacy.validate_selection(Some("default")).is_ok());
+        let short = parse("[auth]\nos = 'linux'\n1 = {run = 'true'}").unwrap();
+        let long = parse("[auth]\nos = 'linux'\n[auth.1]\nrun = 'true'").unwrap();
+        assert_eq!(format!("{short:?}"), format!("{long:?}"));
+        let direct = parse("[auth]\nos = 'linux'\nrun = 'true'").unwrap();
+        assert_eq!(
+            short.scenarios[0].checks[0].check.label(),
+            direct.scenarios[0].checks[0].check.label()
+        );
+        assert_eq!(direct.scenarios[0].checks[0].step, None);
+    }
+
+    #[test]
+    fn one_operation_lives_directly_in_its_scenario() {
+        let m = parse(
+            r#"
+            [auth]
+            os = "linux"
+            run = "./app"
+            ready = "http://localhost/health"
+            timeout = 15
+
+            [request]
+            post = "http://localhost/login"
+            headers = { authorization = "Bearer token" }
+            expect = 200
+            contains = "ok"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(m.scenarios[0].os, Some(Os::Linux));
+        assert_eq!(m.scenarios[0].checks[0].os, None);
+        assert!(matches!(
+            m.scenarios[0].checks[0].check,
+            Check::Service {
+                timeout_secs: 15,
+                ..
+            }
+        ));
+        assert!(matches!(
+            m.scenarios[1].checks[0].check,
+            Check::Http {
+                method: "POST",
+                expect: Some(200),
+                ..
+            }
+        ));
+        assert!(err("[auth]\nos = 'linux'\nrun = 'true'\ntimeuot = 1")
+            .contains("unknown key 'timeuot'"));
+    }
+
+    #[test]
+    fn scenario_shape_is_strict() {
+        for input in [
+            "[empty]",
+            "[empty]\nos = 'linux'",
+            "[empty]\ncheck = []",
+            "[x]\nchecks = [{run = 'true'}]",
+            "check = [{run = 'true'}]\n[x]\nrun = 'true'",
+            "[[auth]]\nrun = 'true'",
+            "['']\nrun = 'true'",
+            "[check]\nrun = 'true'",
+            "[x]\ncheck = [42]",
+            "[x]\ncheck = [{run = 'true'}]",
+            "[[x.check]]\nrun = 'true'",
+            "[x.0]\nrun = 'true'",
+            "[x.01]\nrun = 'true'",
+            "[x.-1]\nrun = 'true'",
+            "[x.999999999999999999999999999999]\nrun = 'true'",
+            "[x]\n1 = 'true'",
+            "[x]\nrun = 'true'\n1 = {run = 'true'}",
+            "[x]\n1 = {run = 'true'}\nexpect = 0",
+            "[x.1]",
+            "[x.1]\nrun = 'true'\n[x.1]\nrun = 'false'",
+        ] {
+            assert!(parse(input).is_err(), "accepted {input}");
+        }
+    }
+
+    #[test]
+    fn os_is_validated_even_in_excluded_scenarios() {
+        for scope in ["'linxu'", "'Linux'", "42", "['linux']"] {
+            assert!(parse(&format!("[x]\nos = {scope}\nrun = 'true'")).is_err());
+            assert!(parse(&format!("[x.1]\nos = {scope}\nrun = 'true'")).is_err());
+            assert!(parse(&format!("check = [{{run = 'true', os = {scope}}}]")).is_err());
+        }
+        let e = err("[foreign]\nos = 'windows'\n[foreign.7]\nrun = 'true'\nredy = 'url'");
+        assert!(e.contains("foreign") && e.contains("redy"), "{e}");
+        assert!(e.contains("check 7"), "{e}");
+        assert!(Os::Linux.matches("linux"));
+        assert!(!Os::Linux.matches("macos"));
+        assert!(Os::Macos.matches("macos"));
+        assert!(Os::Windows.matches("windows"));
+    }
+
+    #[test]
+    fn check_scope_cannot_override_scenario_or_isolate_service_startup() {
+        assert!(parse("[x]\nos = 'linux'\n[x.1]\nrun = 'true'\nos = 'linux'").is_ok());
+        assert!(parse("[x]\nos = 'linux'\n[x.1]\nrun = 'true'\nos = 'macos'").is_err());
+        for service in ["background = true", "ready = 'http://x'"] {
+            assert!(parse(&format!(
+                "check = [{{run = 'true', os = 'linux', {service}}}]"
+            ))
+            .is_err());
+            assert!(parse(&format!("[x.1]\nrun = 'true'\nos = 'linux'\n{service}")).is_err());
+        }
+        assert!(parse("[x]\nos = 'linux'\n[x.1]\nrun = 'x'\nbackground = true").is_ok());
+        assert!(parse("[x]\nos = 'linux'\nrun = 'x'\nbackground = true").is_ok());
+        assert!(parse("check = [{run = 'x', ready = 'u', background = 'yes'}]").is_err());
     }
 }

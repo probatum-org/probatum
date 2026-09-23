@@ -1,0 +1,7 @@
+[selected]
+run = "exit 90"
+
+[outside]
+os = "windows"
+run = "true"
+timeuot = 1
