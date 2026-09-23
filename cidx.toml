@@ -38,8 +38,6 @@ workdir = "/app"
 volumes = [
     "${WORKSPACE}:/app",
     "${WORKSPACE}/.git:/app/.git",
-    # the bump commit is authored as whoever runs the release — no identity in the repo
-    "${HOME}/.gitconfig:/tmp/.gitconfig:ro",
 ]
 watch_workflow = true
 
