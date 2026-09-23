@@ -46,8 +46,8 @@ are *caught* (exit 1 exactly).
   failed. Capture references are the one sanctioned dependency (see below).
 - Named scenarios put one operation and optional `os` directly in `[auth]`.
   Several operations use `[auth.1]`, `[auth.2]`, etc., with scope on `[auth]`.
-  Step numbers are positive, ordered numerically, may have gaps, and have no
-  leading zeros. Do not mix direct/numbered operations or add a `check` wrapper.
+  Step numbers are positive, declared in ascending order (the file reads in
+  the order it runs), may have gaps, and have no leading zeros. Do not mix direct/numbered operations or add a `check` wrapper.
   `--scenario NAME` selects one plus capture prerequisites; legacy root checks
   remain scenario `default`.
   Validate the whole file before filtering; keep OS scope a fixed criterion.

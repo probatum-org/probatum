@@ -1,9 +1,9 @@
 # The deliberately non-alphabetical names also pin source order in the report.
 [z_login]
-# Deliberately scrambled step numbers pin numeric order (1, 2, 10), including gaps.
-10 = { log = "demo-app/data/app.log", contains = ["auth login ok"] }
-2 = { post = "http://127.0.0.1:8087/auth/login", body = '{"username":"editor","password":"hunter2"}', expect = 200 }
+# Steps run in declaration order; the gap before 10 is allowed.
 1 = { run = "AUTH=1 LOG_FILE=demo-app/data/app.log python3 demo-app/app.py", ready = "http://127.0.0.1:8087/healthz", timeout = 15 }
+2 = { post = "http://127.0.0.1:8087/auth/login", body = '{"username":"editor","password":"hunter2"}', expect = 200 }
+10 = { log = "demo-app/data/app.log", contains = ["auth login ok"] }
 
 # This must work both after z_login and when selected on its own:
 # same port is available again, no inherited cookie, no earlier login in the log window.

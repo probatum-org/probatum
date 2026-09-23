@@ -149,10 +149,17 @@ timeout = 30
 # Named scenarios: assert structured results and the persisted evidence copy.
 
 [[check]]
-name = "scenarios isolate state in source order with steps in numeric order"
+name = "scenarios isolate state and run in source order"
 run = "./target/debug/probatum run .probatum/scenario-isolation.toml --json | python3 demo-app/tests/scenario_report.py '{\"verdict\": \"pass\", \"scenario_order\": [\"z_login\", \"a_fresh\"], \"executed\": 6, \"excluded\": 0, \"skipped\": 0, \"selected_scenario\": null}'"
 contains = ["scenario report verified"]
 timeout = 30
+
+# the file reads in the order it runs: a step declared after a higher one is refused
+[[check]]
+name = "out-of-order steps are refused, not reordered"
+run = "printf '[a.2]\\nrun = \"true\"\\n[a.1]\\nrun = \"true\"\\n' | ./target/debug/probatum run -"
+expect = 2
+contains = ["step 1 is declared after step 2"]
 
 [[check]]
 name = "a selected scenario works alone and reports nonselection"

@@ -369,7 +369,8 @@ an excluded scenario must not hide a typo or malformed rule.
 selector, or unknown name is an invalid-config error (exit 2), before any check
 runs. Unknown CLI options and surplus positional arguments are also errors.
 Scenarios run sequentially in order of first appearance in the file. Numbered
-steps run in ascending numeric order (1, 2, 10), regardless of declaration order;
+steps run in ascending numeric order (1, 2, 10) — superseded on 2026-09-23: they
+must now also be declared in that order;
 legacy root checks retain list order. Selection does not change that order. Enable TOML's
 `preserve_order` feature: the current `toml::Table` sorts keys by name. No
 multi-selector syntax, patterns, dependencies, or parallel execution in this
@@ -549,6 +550,18 @@ in memory; reports retain outcomes, timings and unexpanded labels. The frozen
 config is still verbatim, including literal credentials. Application-owned files
 are outside this policy. A future finer-grained redaction mechanism would need
 to preserve these guarantees.
+
+### Steps are declared in order (2026-09-23)
+
+Numbered steps used to run in numeric order whatever their declaration order,
+so `[auth.10]` written before `[auth.2]` still ran last. Tolerant, but it broke
+the first reading promise: the file no longer read top to bottom in the order
+it ran. The owner chose strictness: a step declared after a higher-numbered
+one is now a config error ("step 1 is declared after step 2"), in every
+spelling (blocks, inline `2 = {…}`, blocks split around another scenario).
+Execution order is declaration order; the numbers only name the steps, and
+gaps remain allowed to insert one. This refuses configs that were accepted in
+0.11.0, which only affects files that relied on reordering.
 
 ### Why this reverses the 2026-08-14 refusal
 

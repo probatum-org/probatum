@@ -162,8 +162,9 @@ For several operations, number the steps; there is no check wrapper:
   get = "http://localhost:8080/version"
   expect = 200
 
-Steps run in numeric order (1, 2, 10), regardless of block order. Use positive
-integers without leading zeros; gaps are allowed. Multiple steps may use run.
+Steps run in the order they are written, and must be declared in ascending
+order (1, 2, 10): a step after a higher one is an error. Use positive integers
+without leading zeros; gaps are allowed. Multiple steps may use run.
 Do not mix a direct operation and numbered steps in one scenario. Short steps
 also support ordinary TOML inline tables: 1 = { run = "cargo test" } under [smoke].
 
@@ -265,7 +266,7 @@ for an app probatum starts, keep the sequence in one scenario (${auth.2.token}).
 `timeout` means one thing everywhere: how long probatum waits before calling
 it a failure. unknown keys are errors, and so is a rule of the wrong type — a
 dropped rule is a check that silently asserts less. Scenarios run in file order,
-with required producers first, numbered steps in numeric order, legacy checks in
+with required producers first, numbered steps in declaration order, legacy checks in
 list order. Execution stops
 globally at the first failure or error. Each scenario gets fresh cookies
 and log windows, and its process groups are cleaned up before the next scenario.
@@ -439,7 +440,7 @@ fn init() -> Result<i32> {
 
 const EXAMPLE: &str = r#"# probatum.toml — probatum run (all), or probatum run --scenario smoke
 # A single operation goes directly in its scenario; number steps for a sequence.
-# Unknown keys/types are errors. Numbered steps run in numeric order.
+# Unknown keys/types are errors. Declare numbered steps in ascending order.
 # Existing root [[check]] files also work as scenario "default"; do not mix forms.
 
 [smoke]

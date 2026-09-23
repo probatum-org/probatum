@@ -72,8 +72,9 @@ is needed. Numbers are positive integers without leading zeros; gaps are allowed
 Do not mix a direct operation and numbered steps in the same scenario.
 
 `probatum run` runs scenarios in order of first appearance, with capture producers
-before their consumers, and numbered steps
-in ascending numeric order, regardless of where their blocks appear in the file.
+before their consumers, and numbered steps in the order they are written. Steps
+must be declared in ascending order — `[auth.2]` after `[auth.10]` is an error —
+so the file always reads in the order it runs.
 `probatum run --scenario auth` selects that scenario and its capture prerequisites. Names are
 case-sensitive; unknown names and duplicate selectors are errors. Each scenario
 owns its services, cookie jar, and log observation window, so it can run alone.

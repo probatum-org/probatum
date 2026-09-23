@@ -91,8 +91,9 @@ cargo fmt -- --check
   observable result, flat pass/fail rules.
 - Named scenarios put one operation and optional `os` directly in `[auth]`.
   Several operations use `[auth.1]`, `[auth.2]`, etc., with scope on `[auth]`.
-  Execute positive step numbers in numeric order; gaps are allowed, leading
-  zeros and mixing direct/numbered operations are not. No named `check` wrapper.
+  Steps run in declaration order and must be declared in ascending number
+  order (a step declared after a higher one is an error); gaps are allowed,
+  leading zeros and mixing direct/numbered operations are not. No named `check` wrapper.
   Legacy root checks are the implicit `default` scenario; do not mix forms in one file.
   `--scenario NAME` selects one exact name plus inferred capture prerequisites.
   Validate all scenarios before filtering.

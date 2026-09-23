@@ -229,9 +229,15 @@ fn parse_scenario_checks(map: &Table, scenario_os: Option<Os>) -> Result<Vec<Sco
         let step = value
             .as_table()
             .with_context(|| format!("check {n} must be a table, for example [auth.{n}]"))?;
+        // The file reads top to bottom: execution order is declaration order,
+        // and numbers only name the steps (gaps leave room to insert one).
+        if let Some(&(previous, _)) = steps.last() {
+            if n <= previous {
+                bail!("step {n} is declared after step {previous}: declare numbered steps in ascending order, so the file reads in the order it runs");
+            }
+        }
         steps.push((n, step));
     }
-    steps.sort_unstable_by_key(|(n, _)| *n);
     steps
         .into_iter()
         .map(|(n, step)| parse_scoped_check(step, n, scenario_os))
@@ -765,8 +771,8 @@ mod tests {
     }
 
     #[test]
-    fn scenarios_preserve_source_order_and_sort_steps_numerically() {
-        let m = parse("[zeta.10]\nrun = 'third'\n[zeta.2]\nrun = 'second'\n[zeta.1]\nrun = 'first'\n[alpha]\nrun = 'fourth'").unwrap();
+    fn scenarios_and_steps_run_in_source_order() {
+        let m = parse("[zeta.1]\nrun = 'first'\n[zeta.2]\nrun = 'second'\n[zeta.10]\nrun = 'third'\n[alpha]\nrun = 'fourth'").unwrap();
         assert_eq!(
             m.scenarios
                 .iter()
@@ -780,6 +786,28 @@ mod tests {
         assert_eq!(m.scenarios[1].checks[0].check.label(), "fourth");
         assert!(m.validate_selection(Some("alpha")).is_ok());
         assert!(m.validate_selection(Some("Alpha")).is_err());
+        // Out-of-order declarations are refused, in every spelling.
+        for text in [
+            "[a.2]\nrun = 'x'\n[a.1]\nrun = 'y'",
+            "[a]\n10 = {run = 'x'}\n2 = {run = 'y'}",
+            "[a]\n2 = {run = 'x'}\n[a.1]\nrun = 'y'",
+            "[a.2]\nrun = 'x'\n[b]\nrun = 'z'\n[a.1]\nrun = 'y'",
+        ] {
+            assert!(parse(text).is_err(), "accepted {text}");
+        }
+        assert!(
+            err("[a.2]\nrun = 'x'\n[a.1]\nrun = 'y'").contains("step 1 is declared after step 2")
+        );
+        // Removing the scope key must not reorder the steps that follow it.
+        let scoped =
+            parse("[a]\nos = 'linux'\n1 = {run = 'one'}\n2 = {run = 'two'}\n3 = {run = 'three'}")
+                .unwrap();
+        let labels: Vec<_> = scoped.scenarios[0]
+            .checks
+            .iter()
+            .map(|c| c.check.label())
+            .collect();
+        assert_eq!(labels, ["one", "two", "three"]);
     }
 
     #[test]
