@@ -9,7 +9,8 @@ version = "0.10.0"
 tag_format = "v$version"
 # Pre-1.0: a breaking change bumps the minor; 1.0.0 is a deliberate `cz bump 1.0.0`.
 major_version_zero = true
-version_files = ["Cargo.toml:^version", ".cz.toml:^version"]
+# VERSION is what `cidx release create` reads back after the bump.
+version_files = ["VERSION", "Cargo.toml:^version", ".cz.toml:^version"]
 update_changelog_on_bump = true
 changelog_file = "CHANGELOG.md"
 changelog_incremental = true
