@@ -1,3 +1,15 @@
+## v0.12.0 (2026-09-23)
+
+### BREAKING CHANGE
+
+- configs that declared numbered steps out of ascending
+order are refused (exit 2, "step N is declared after step M") instead of
+being reordered. Reorder the blocks; behaviour is otherwise unchanged.
+
+### Feat
+
+- numbered steps run in the order they are declared
+
 ## v0.11.0 (2026-09-23)
 
 ### BREAKING CHANGE
