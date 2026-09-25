@@ -1,3 +1,9 @@
+## v0.13.1 (2026-09-25)
+
+### Fix
+
+- rules see every line of the output, not the first 100,000
+
 ## v0.13.0 (2026-09-24)
 
 ### Feat
