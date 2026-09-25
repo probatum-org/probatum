@@ -453,7 +453,7 @@ children before waiting for capture to finish, and a service that exits after
 startup is reported as failed even without a crash marker. Capture readers are
 drained at scenario teardown and ownership slots are cleared between scenarios.
 The separate large-output issue found during the initial review (rules evaluate
-only the first 100,000 captured lines) remains engineering debt.
+only the first 100,000 captured lines) was fixed on 2026-09-25, see below.
 
 Acceptance checks exercise the public binary, including non-alphabetical scenario
 order, steps declared out of numeric order, selecting a scenario alone,
@@ -550,6 +550,18 @@ in memory; reports retain outcomes, timings and unexpanded labels. The frozen
 config is still verbatim, including literal credentials. Application-owned files
 are outside this policy. A future finer-grained redaction mechanism would need
 to preserve these guarantees.
+
+### Rules see every line (2026-09-25)
+
+The debt recorded above was worse than debt: reproduced, a `contains` on line
+150,001 failed on output that matched (a false failure) and an `absent` passed
+over a `FATAL` there (a false pass); a service's crash filter and a passing
+command's summary ("test result: …", always at the end) had the same blind
+spot. Memory keeps the first 100,000 lines because diagnosis wants the first
+panic — but the rules read that copy. They are now evaluated per line as
+output arrives, under the same lock that orders stdout and stderr, and the
+bounded copy serves diagnosis only. The cause context (one line before, two
+after) is unchanged. Two dogfooding checks lock both directions.
 
 ### `min_ms` (2026-09-23, issue #8)
 

@@ -18,8 +18,32 @@ pub struct LogLine {
 
 #[derive(Clone, Default)]
 pub struct CapturedLogs {
-    lines: Arc<Mutex<Vec<LogLine>>>,
+    state: Arc<Mutex<State>>,
     stdout: Option<Arc<Mutex<Stdout>>>,
+}
+
+/// The rules a check applies to its output. They are evaluated on every line
+/// as it arrives, never on the bounded in-memory copy: a pattern on line
+/// 150,001 must count exactly like one on line 1.
+#[derive(Default)]
+pub struct Rules {
+    pub contains: Vec<String>,
+    /// `absent`, plus the default crash markers for a service.
+    pub forbid: Vec<String>,
+    pub allow: Vec<String>,
+}
+
+#[derive(Default)]
+struct State {
+    lines: Vec<LogLine>,
+    rules: Rules,
+    found: Vec<bool>,
+    /// First forbidden line with its context: one line before, two after.
+    hit: Vec<LogLine>,
+    hit_at: usize,
+    after: usize,
+    prev: Option<LogLine>,
+    summary: Option<String>,
 }
 
 #[derive(Default)]
@@ -30,10 +54,12 @@ struct Stdout {
 
 pub const WITHHELD: &str = "[output withheld: scenario captures or consumes values]\n";
 
-/// A chatty (or hostile) service must not take probatum down with it. The
-/// Public evidence keeps everything; sensitive scenarios withhold payloads.
-/// Memory keeps the earliest lines, which is what diagnosis needs — the first
-/// panic/error marker wins. Named stdout capture has a separate bounded buffer.
+/// A chatty (or hostile) service must not take probatum down with it. Public
+/// evidence keeps everything; sensitive scenarios withhold payloads. Memory
+/// keeps the earliest lines, which is what diagnosis needs — the first
+/// panic/error marker wins. Rules are evaluated per line as output arrives,
+/// so this bound never changes a verdict. Named stdout capture has a separate
+/// bounded buffer.
 const MAX_LINES_IN_MEMORY: usize = 100_000;
 
 impl CapturedLogs {
@@ -50,13 +76,63 @@ impl CapturedLogs {
         String::from_utf8(raw.bytes.clone())
             .map_err(|_| anyhow::anyhow!("stdout capture is not UTF-8"))
     }
+    /// The earliest lines, for diagnosis only — rules never read this.
     pub fn snapshot(&self) -> Vec<LogLine> {
-        self.lines.lock().unwrap().clone()
+        self.state.lock().unwrap().lines.clone()
+    }
+    /// First `contains` pattern seen on no line of the whole output.
+    pub fn missing(&self) -> Option<String> {
+        let st = self.state.lock().unwrap();
+        st.rules
+            .contains
+            .iter()
+            .zip(&st.found)
+            .find(|(_, found)| !**found)
+            .map(|(pattern, _)| pattern.clone())
+    }
+    /// The first forbidden line (not exempted by `allow`) and its context,
+    /// with the index of the offending line within that context.
+    pub fn forbidden(&self) -> Option<(Vec<LogLine>, usize)> {
+        let st = self.state.lock().unwrap();
+        (!st.hit.is_empty()).then(|| (st.hit.clone(), st.hit_at))
+    }
+    /// The last line that looks like a test summary ("test result: ok. …").
+    pub fn summary(&self) -> Option<String> {
+        self.state.lock().unwrap().summary.clone()
     }
     fn push(&self, line: LogLine) {
-        let mut lines = self.lines.lock().unwrap();
-        if lines.len() < MAX_LINES_IN_MEMORY {
-            lines.push(line);
+        let mut st = self.state.lock().unwrap();
+        let st = &mut *st;
+        for (pattern, found) in st.rules.contains.iter().zip(st.found.iter_mut()) {
+            *found |= line.text.contains(pattern.as_str());
+        }
+        if st.after > 0 {
+            st.hit.push(line.clone());
+            st.after -= 1;
+        } else if st.hit.is_empty()
+            && st
+                .rules
+                .forbid
+                .iter()
+                .any(|p| line.text.contains(p.as_str()))
+            && !st
+                .rules
+                .allow
+                .iter()
+                .any(|a| line.text.contains(a.as_str()))
+        {
+            st.hit.extend(st.prev.take());
+            st.hit_at = st.hit.len();
+            st.hit.push(line.clone());
+            st.after = 2;
+        }
+        let t = line.text.trim();
+        if t.contains("passed") || t.contains("test result:") || t.contains("ok.") {
+            st.summary = Some(t.chars().take(90).collect());
+        }
+        st.prev = Some(line.clone());
+        if st.lines.len() < MAX_LINES_IN_MEMORY {
+            st.lines.push(line);
         }
     }
 }
@@ -68,10 +144,15 @@ pub fn attach(
     started: Instant,
     private: bool,
     collect_stdout: bool,
+    rules: Rules,
 ) -> (CapturedLogs, Vec<JoinHandle<()>>) {
     let logs = CapturedLogs {
         stdout: collect_stdout.then(|| Arc::new(Mutex::new(Stdout::default()))),
-        ..CapturedLogs::default()
+        state: Arc::new(Mutex::new(State {
+            found: vec![false; rules.contains.len()],
+            rules,
+            ..State::default()
+        })),
     };
     // An unwritable evidence dir must not panic the runner: capture keeps
     // working in memory, and the caller is told the file does not exist

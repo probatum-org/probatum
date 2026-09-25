@@ -8,7 +8,7 @@
 //!   replacement/truncation during the window is ambiguous → couldn't-run;
 //! - a port that already answers before we start our service = dirty environment.
 
-use crate::capture::{self, CapturedLogs, LogLine};
+use crate::capture::{self, CapturedLogs};
 use crate::diagnose::{self, Cause};
 use crate::manifest::{Check, Manifest, Scenario, ScopedCheck};
 use crate::values::{self, Plan, Store};
@@ -95,9 +95,6 @@ struct Service {
     child: Child,
     logs: CapturedLogs,
     report_index: usize,
-    contains: Vec<String>,
-    absent: Vec<String>,
-    allow: Vec<String>,
     handles: Vec<std::thread::JoinHandle<()>>,
 }
 
@@ -564,11 +561,11 @@ fn finish_services(mut services: Vec<Service>, out: &mut [CheckReport]) {
                 r.detail = Some(format!("couldn't observe service: {e}"));
             }
             Ok(None) => {
-                if let Some(cause) = scan_lines(&lines, &svc.absent, &svc.allow, true) {
+                if let Some(cause) = forbidden_cause(&svc.logs) {
                     r.status = Status::Failed;
                     r.detail = Some("error in logs".into());
                     r.cause = Some(cause);
-                } else if let Some(missing) = find_missing(&lines, &svc.contains) {
+                } else if let Some(missing) = svc.logs.missing() {
                     r.status = Status::Failed;
                     r.detail = Some(format!("output missing \"{missing}\""));
                 }
@@ -612,6 +609,11 @@ fn run_cmd(
         started,
         log_file.private,
         output.is_some(),
+        capture::Rules {
+            contains: contains.to_vec(),
+            forbid: absent.to_vec(),
+            allow: Vec::new(),
+        },
     );
 
     let status = match timeout_secs {
@@ -662,7 +664,7 @@ fn run_cmd(
         // command killed by a signal has no code and can never match.
         Ok(s) if s.code() == Some(expect as i32) => {
             // Expected exit — but explicit rules still apply to the output.
-            if let Some(cause) = scan_lines(&lines, absent, &[], false) {
+            if let Some(cause) = forbidden_cause(&logs) {
                 return report(
                     check,
                     log_file,
@@ -671,7 +673,7 @@ fn run_cmd(
                     Some(cause),
                 );
             }
-            if let Some(missing) = find_missing(&lines, contains) {
+            if let Some(missing) = logs.missing() {
                 return report(
                     check,
                     log_file,
@@ -680,7 +682,7 @@ fn run_cmd(
                     None,
                 );
             }
-            report(check, log_file, Status::Passed, summarize(&lines), None)
+            report(check, log_file, Status::Passed, logs.summary(), None)
         }
         Ok(s) => {
             let detail = if expect == 0 {
@@ -749,6 +751,16 @@ fn run_service(
         started,
         log_file.private,
         false,
+        capture::Rules {
+            contains: contains.to_vec(),
+            // No exit code to trust while it runs: the crash markers apply.
+            forbid: CRITICAL
+                .iter()
+                .map(|m| m.to_string())
+                .chain(absent.iter().cloned())
+                .collect(),
+            allow: allow.to_vec(),
+        },
     );
 
     let track = |services: &mut Vec<Service>, child, logs: &CapturedLogs| {
@@ -756,9 +768,6 @@ fn run_service(
             child,
             logs: logs.clone(),
             report_index,
-            contains: contains.to_vec(),
-            absent: absent.to_vec(),
-            allow: allow.to_vec(),
             handles,
         });
     };
@@ -1113,46 +1122,16 @@ fn store_cookies(cookies: &mut Vec<(String, String)>, set_cookie: &[String]) {
     }
 }
 
-/// First line matching a forbidden pattern (optionally including the default
-/// crash markers), unless an `allow` pattern exempts it.
-fn scan_lines(
-    lines: &[LogLine],
-    absent: &[String],
-    allow: &[String],
-    with_defaults: bool,
-) -> Option<Cause> {
-    let hit = |l: &LogLine| {
-        let matched = (with_defaults && CRITICAL.iter().any(|m| l.text.contains(m)))
-            || absent.iter().any(|p| l.text.contains(p.as_str()));
-        matched && !allow.iter().any(|a| l.text.contains(a.as_str()))
-    };
-    let idx = lines.iter().position(hit)?;
-    let lo = idx.saturating_sub(1);
-    let hi = (idx + 3).min(lines.len());
+/// The first forbidden line of the whole output, as a failure cause.
+fn forbidden_cause(logs: &CapturedLogs) -> Option<Cause> {
+    let (context, at) = logs.forbidden()?;
     Some(Cause {
-        headline: lines[idx].text.trim().to_string(),
-        correlated: lines[lo..hi]
+        headline: context[at].text.trim().to_string(),
+        correlated: context
             .iter()
             .map(|l| format!("[{:>6}ms {}] {}", l.at_ms, l.source, l.text.trim_end()))
             .collect(),
     })
-}
-
-/// First `contains` pattern that appears nowhere in the output.
-fn find_missing<'a>(lines: &[LogLine], contains: &'a [String]) -> Option<&'a String> {
-    contains
-        .iter()
-        .find(|p| !lines.iter().any(|l| l.text.contains(p.as_str())))
-}
-
-fn summarize(lines: &[LogLine]) -> Option<String> {
-    for l in lines.iter().rev() {
-        let t = l.text.trim();
-        if t.contains("passed") || t.contains("test result:") || t.contains("ok.") {
-            return Some(t.chars().take(90).collect());
-        }
-    }
-    None
 }
 
 fn report(

@@ -1,0 +1,13 @@
+# Rules must see every line, not the bounded in-memory copy (the first 100,000
+# lines, kept for diagnosis). Through 0.13.0 a pattern past that bound was
+# invisible: `contains` failed on output that matched — a false failure — and
+# `absent` passed over a FATAL — a false pass.
+[contains_late]
+run = "seq 1 150000; echo ALL-DONE"
+contains = ["ALL-DONE"]
+timeout = 30
+
+[absent_late]
+run = "seq 1 150000; echo 'FATAL: disk full'"
+absent = ["FATAL"]
+timeout = 30

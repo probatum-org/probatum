@@ -107,6 +107,20 @@ run = "./target/debug/probatum run .probatum/too-slow.toml"
 expect = 1
 timeout = 30
 
+# rules read every line of the output, not the first 100,000 kept in memory:
+# one check per direction — a false failure and a false pass
+[[check]]
+name = "contains sees a line past the in-memory bound"
+run = "./target/debug/probatum run .probatum/late-lines.toml --scenario contains_late"
+timeout = 60
+
+[[check]]
+name = "absent catches a line past the in-memory bound"
+run = "./target/debug/probatum run .probatum/late-lines.toml --scenario absent_late"
+expect = 1
+contains = ["FATAL: disk full"]
+timeout = 60
+
 # the mirror: a correct answer that arrives too fast is a failure (issue #8)
 [[check]]
 name = "under-floor latency is caught"
