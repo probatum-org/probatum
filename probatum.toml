@@ -20,7 +20,13 @@ contains = ["test result: ok."]
 [[check]]
 name = "--help documents the config surface"
 run = "./target/debug/probatum --help"
-contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "min_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init", "--scenario", "os =", "no_applicable_checks", "not_selected", "os_mismatch", "previous_failure", "capture =", "env =", "dependency_unavailable", "output_withheld"]
+contains = ["run =", "get =", "post =", "put =", "patch =", "delete =", "log =", "timeout =", "background =", "max_ms =", "min_ms =", "expect =", "absent =", "Set-Cookie", "exit codes", "schema-valid document", "probatum init", "probatum --version", "--scenario", "os =", "no_applicable_checks", "not_selected", "os_mismatch", "previous_failure", "capture =", "env =", "dependency_unavailable", "output_withheld"]
+
+# --version answers from a bare binary (issue #15): in a directory with no
+# probatum.toml, exactly "probatum <Cargo.toml version>", exit 0, nothing written
+[[check]]
+name = "--version reports the build version without a config"
+run = '''bin=$PWD/target/debug/probatum; v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1); d=$(mktemp -d); cd "$d" && test "$("$bin" --version)" = "probatum $v" && test -z "$(ls -A)"; c=$?; rmdir "$d" 2>/dev/null; exit $c'''
 
 # the full demo flow (service + http + external log) must be green
 [[check]]

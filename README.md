@@ -10,6 +10,7 @@ that make a check pass or fail.
 curl -sSfL https://github.com/probatum-org/probatum/releases/latest/download/probatum-x86_64-linux \
   -o ~/.local/bin/probatum && chmod +x ~/.local/bin/probatum
 
+probatum --version                  # "probatum X.Y.Z" — reads no config, runs nothing
 probatum init                       # drop a commented example probatum.toml
 probatum run                        # runs ./probatum.toml (like make & Makefile)
 probatum run --scenario auth        # select one named scenario

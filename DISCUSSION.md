@@ -551,6 +551,18 @@ config is still verbatim, including literal credentials. Application-owned files
 are outside this policy. A future finer-grained redaction mechanism would need
 to preserve these guarantees.
 
+### `--version` (2026-10-02, issue #15)
+
+An orchestrator (Drassana) freezes tool versions before a run and asked a bare
+binary for its own, in a directory with no config: `--version` was an unknown
+option. `probatum --version` (or `-V`) now prints exactly `probatum X.Y.Z`
+from `CARGO_PKG_VERSION` — which `cidx release create` bumps before the
+release build — and exits 0 before any config is looked for; nothing is
+written. The one-line format is the documented, stable contract. A JSON form
+was offered as optional and is not added: the line is trivially parsed, and a
+second format would be a second contract to keep. Run schema and exit codes
+are untouched.
+
 ### Rules see every line (2026-09-25)
 
 The debt recorded above was worse than debt: reproduced, a `contains` on line

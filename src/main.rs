@@ -77,7 +77,7 @@ fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
 }
 
 const USAGE: &str =
-    "usage: probatum run [probatum.toml|-] [--scenario NAME] [--json] [--seed N] | probatum init";
+    "usage: probatum run [probatum.toml|-] [--scenario NAME] [--json] [--seed N] | probatum init | probatum --version";
 const DEFAULT_CONFIG: &str = "probatum.toml";
 
 /// Schema 4 adds capture names, step identity, inferred prerequisites, output
@@ -139,6 +139,8 @@ const HELP: &str = r#"probatum — test-oriented check runner. One config, embed
 only the failures that matter.
 
 usage:
+  probatum --version            print "probatum X.Y.Z" and exit 0 (stable format;
+                                reads no config, runs nothing)
   probatum init                 write a commented example probatum.toml
   probatum run [file|-]         run checks (default ./probatum.toml, - = stdin)
       --scenario NAME           select a scenario and its capture prerequisites
@@ -302,6 +304,7 @@ document --json prints)"#;
 #[derive(Debug)]
 struct Options {
     help: bool,
+    version: bool,
     init: bool,
     path: Option<String>,
     scenario: Option<String>,
@@ -311,6 +314,7 @@ struct Options {
 
 fn parse_args(args: &[String]) -> Result<Options> {
     let mut help = false;
+    let mut version = false;
     let mut json = false;
     let mut seed: Option<u32> = None;
     let mut scenario = None;
@@ -320,6 +324,7 @@ fn parse_args(args: &[String]) -> Result<Options> {
     while let Some(a) = it.next() {
         match a.as_str() {
             "--help" | "-h" => help = true,
+            "--version" | "-V" => version = true,
             "--json" => json = true,
             "--seed" => {
                 if seed.is_some() {
@@ -347,13 +352,14 @@ fn parse_args(args: &[String]) -> Result<Options> {
     }
 
     match positional.first().map(String::as_str) {
-        _ if help => {}
+        _ if help || version => {}
         Some("run") if positional.len() <= 2 => {}
         Some("init") if positional.len() == 1 && scenario.is_none() && seed.is_none() && !json => {}
         _ => bail!("{USAGE}"),
     }
     Ok(Options {
         help,
+        version,
         init: positional.first().is_some_and(|s| s == "init"),
         path: positional.get(1).cloned(),
         scenario,
@@ -367,6 +373,12 @@ fn real_main(args: &[String]) -> Result<i32> {
     let options = parse_args(args).context("invalid config")?;
     if options.help {
         println!("{HELP}");
+        return Ok(0);
+    }
+    // Before any config is looked for: an orchestrator freezing tool versions
+    // asks this of a bare binary, in a directory with no probatum.toml.
+    if options.version {
+        println!("probatum {}", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     }
     if options.init {
@@ -542,6 +554,8 @@ mod tests {
         // A value that resembles an option is still an exact scenario name.
         assert!(!args(&["run", "--scenario", "--help"]).unwrap().help);
         assert!(args(&["--help"]).unwrap().help);
+        assert!(args(&["--version"]).unwrap().version);
+        assert!(args(&["-V"]).unwrap().version);
     }
 
     #[test]
