@@ -1,3 +1,9 @@
+## v0.14.0 (2026-10-02)
+
+### Feat
+
+- probatum --version reports the build version without a config
+
 ## v0.13.1 (2026-09-25)
 
 ### Fix
